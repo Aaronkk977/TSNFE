@@ -1,0 +1,41 @@
+# Core dependencies for tw-analyst-signal-pipeline
+# Generated from pyproject.toml
+
+# YouTube & Download
+yt-dlp>=2024.0.0
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.0.0
+
+# Speech-to-Text
+faster-whisper>=1.0.0
+
+# LLM APIs
+openai>=1.12.0
+anthropic>=0.18.0
+google-generativeai>=0.3.0
+instructor>=0.5.0
+
+# Data Validation & Configuration
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+tenacity>=8.2.3
+loguru>=0.7.0
+pyyaml>=6.0
+requests>=2.31.0
+tqdm>=4.66.0
+
+# Framework support
+langchain>=0.1.0
+langchain-openai>=0.0.5
+
+# Audio Processing
+ffmpeg-python>=0.2.0
+librosa>=0.10.0
+
+# Chinese Text Processing
+opencc-python-reimplemented>=0.1.7

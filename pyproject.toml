@@ -1,0 +1,126 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tw-analyst-signal-pipeline"
+version = "0.1.0"
+description = "台灣股市分析師影片訊號萃取管線 - 量化交易 Alternative Data 系統"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Quant Team", email = "info@example.com"}
+]
+keywords = [
+    "taiwan-stocks",
+    "quantitative-trading",
+    "alternative-data",
+    "nlp",
+    "speech-recognition",
+    "signal-extraction"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment"
+]
+
+dependencies = [
+    # YouTube & Download
+    "yt-dlp>=2024.0.0",
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.23.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.0.0",
+    
+    # Speech-to-Text
+    "faster-whisper>=1.0.0",
+    
+    # LLM APIs
+    "openai>=1.12.0",
+    "anthropic>=0.18.0",
+    "google-generativeai>=0.3.0",
+    "instructor>=0.5.0",
+    
+    # Data Validation & Configuration
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.3",
+    "loguru>=0.7.0",
+    "pyyaml>=6.0",
+    "requests>=2.31.0",
+    "tqdm>=4.66.0",
+    
+    # Optional: Framework support
+    "langchain>=0.1.0",
+    "langchain-openai>=0.0.5",
+    
+    # Audio Processing
+    "ffmpeg-python>=0.2.0",
+    "librosa>=0.10.0",
+    
+    # Chinese Text Processing
+    "opencc-python-reimplemented>=0.1.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "pre-commit>=3.5.0",
+    "ipython>=8.16.0",
+    "jupyter>=1.0.0",
+]
+
+all = ["tw-analyst-signal-pipeline[dev]"]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/tw-analyst-signal-pipeline"
+Repository = "https://github.com/yourusername/tw-analyst-signal-pipeline.git"
+Issues = "https://github.com/yourusername/tw-analyst-signal-pipeline/issues"
+Documentation = "https://github.com/yourusername/tw-analyst-signal-pipeline/blob/main/README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "W", "I", "N"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "requires_api: marks tests that require real API keys"
+]

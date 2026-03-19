@@ -1,0 +1,239 @@
+# ============================================================================
+# Taiwan Analyst Signal Pipeline - Main Configuration File
+# ============================================================================
+# This file defines the core pipeline parameters
+# Environment variables in .env override these values
+# ============================================================================
+
+pipeline:
+  name: "tw-analyst-signal-pipeline"
+  version: "0.1.0"
+  description: "Taiwan Stock Analyst Video Signal Extraction"
+  
+  # Retry configuration
+  max_retries: 3
+  retry_base_wait_seconds: 1
+  retry_max_wait_seconds: 60
+  
+  # Processing timeout (seconds)
+  timeout: 300
+  
+  # Concurrent processing limits
+  max_concurrent_downloads: 3
+  max_concurrent_transcriptions: 1  # Limited by GPU memory
+  
+  # Enable/disable intermediate caching
+  enable_caching: true
+  cleanup_temp_files: true
+
+# ============================================================================
+# YouTube Configuration
+# ============================================================================
+youtube:
+  # List of target analyst channel IDs (empty = use parameter)
+  channels: []
+  
+  # How many days back to search for videos
+  video_age_days: 7
+  
+  # Video filters
+  min_video_length_seconds: 300      # Skip videos < 5 minutes
+  max_video_length_seconds: 7200     # Skip videos > 2 hours
+  
+  # Download format
+  download_format: "wav"             # wav (best for Whisper), mp3, m4a
+  audio_bitrate: "192"               # kbps
+  
+  # Rate limiting (API quota management)
+  quota_limit_units_per_day: 10000   # YouTube API default
+  quota_cost_search: 100             # Units per search
+  quota_cost_video_details: 1        # Units per video details
+
+# ============================================================================
+# Transcription Configuration (Whisper/faster-whisper)
+# ============================================================================
+transcription:
+  provider: "gemini"                  # gemini, whisper
+  gemini_model: "gemini-2.5-flash"
+
+  # Model size: tiny, base, small, medium, large
+  model: "medium"
+  
+  # Language code
+  language: "zh"                     # Chinese
+  
+  # Beam search size (higher = more accurate but slower)
+  beam_size: 5
+  
+  # Beam search patience
+  patience: 1.0
+  
+  # Voice Activity Detection
+  enable_vad: true
+  vad_min_silence_duration_ms: 500
+  vad_speech_pad_ms: 400
+  
+  # Chunk configuration for long audio
+  chunk_length_minutes: 10           # Split long audio into chunks
+  chunk_overlap_seconds: 5           # Overlap between chunks
+  
+  # Device settings
+  device: "cuda"                     # cuda or cpu
+  compute_type: "float16"            # float32, float16, int8
+  
+  # Initial prompt (helps with terminology)
+  initial_prompt: |
+    台灣股市金融術語：買進、加碼、賣出、出脫、持有、觀望、
+    嘎空、洗盤、跳空、缺口、壓力、支撐、突破、整理、
+    開盤、收盤、盤中、盤後、大盤、加權、台股、上市、上櫃
+
+# ============================================================================
+# LLM Extraction Configuration
+# ============================================================================
+extraction:
+  # Provider: openai, anthropic, gemini
+  provider: "gemini"
+  
+  # Model selection per provider
+  models:
+    openai: "gpt-4o-mini"           # gpt-4o for higher quality
+    anthropic: "claude-3-sonnet-20240229"
+    gemini: "gemini-2.5-flash"
+  
+  # Temperature (0.0-1.0)
+  temperature: 0.1                   # Lower = more deterministic
+  
+  # Maximum tokens for response
+  max_tokens: 4000
+  
+  # Top P (nucleus sampling)
+  top_p: 0.95
+  
+  # Timeout for LLM API call
+  api_timeout_seconds: 60
+  
+  # Cost tracking
+  track_tokens: true
+  daily_budget_usd: 100.0
+  
+  # Fallback LLM provider (if primary fails)
+  fallback_provider: "null"          # Can be "openai", "anthropic", etc.
+
+# ============================================================================
+# Stock Data Validation Configuration
+# ============================================================================
+stock_data:
+  # Enable validation against official stock list
+  validate_codes: true
+  validation_provider: "fugle"      # fugle, local
+  fugle_base_url: "https://api.fugle.tw/marketdata/v1.0"
+  
+  # Stock code format validation
+  code_pattern: "^\\d{4}$"           # 4-digit Taiwan stock code
+  
+  # Alias resolution
+  resolve_aliases: true
+  alias_fuzzy_match: true            # e.g., "台積" -> "2330"
+  
+  # Data sources
+  datasources:
+    twse: "./data/stock_codes/twse_stocks.csv"      # Taiwan Stock Exchange
+    tpex: "./data/stock_codes/tpex_stocks.csv"      # Taiwan OTC Exchange
+  
+  # Stock confidence threshold (0.0-1.0)
+  min_confidence: 0.3
+
+# ============================================================================
+# Output Configuration
+# ============================================================================
+output:
+  # Output format: json, csv, parquet
+  format: "json"
+  
+  # Pretty print JSON
+  pretty_print: true
+  
+  # Include metadata
+  include_metadata: true
+  
+  # Directory structure
+  directories:
+    transcripts: "./data/transcripts"
+    signals: "./data/signals"
+    checkpoints: "./data/checkpoints"
+    logs: "./logs"
+
+# ============================================================================
+# Logging Configuration
+# ============================================================================
+logging:
+  level: "INFO"                      # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  
+  # Output targets
+  console:
+    enabled: true
+    format: "standard"               # standard, json, minimal
+  
+  file:
+    enabled: true
+    format: "detailed"
+    rotation: "daily"                # daily, midnight, 100 MB
+    retention: 7                     # days
+  
+  # Structured logging fields
+  include_timestamp: true
+  include_module: true
+  include_function: true
+  include_line_number: true
+  
+  # Sensitive data masking
+  mask_api_keys: true
+  mask_video_ids: true
+
+# ============================================================================
+# Prompt Templates
+# ============================================================================
+prompts:
+  system: |
+    你是專業的台灣股市分析助手。從投顧分析師的影片逐字稿中精準提取股票買賣訊號。
+    
+    核心職責：
+    1. 識別明確的股票推薦（不包含歷史回顧或假設性討論）
+    2. 確保股票代碼為台股 4 位數格式（如 2330、0050）
+    3. 判斷情感時注意語氣與上下文（「不建議」= 賣出）
+    4. 推論台灣投資人常用的股票別名（如「護國神山」→ 2330）
+  
+  extraction: |
+    從以下投顧分析師影片逐字稿中，精確提取**所有股票買賣訊號**：
+    
+    --------
+    {transcript}
+    --------
+    
+    請回傳標準 JSON 格式，包含：
+    - stock_code: 台股 4 位數代碼
+    - stock_name: 公司名稱或股票簡稱
+    - action: buy（買進/加碼）、sell（賣出/出脫）或 hold（持有/觀望）
+    - confidence: 信心度 0.0-1.0
+    - reasoning: 分析師明確說過的推會理由（1-2 句）
+    
+    **重要提醒**：
+    - 忽略分析師的歷史回顧或假設性言論（「如果...就會...」）
+    - 只提取主要訊號，忽略閒聊或題外話
+    - 若多次提及同股不同看法，記錄最後一次的動作
+
+# ============================================================================
+# Provider-Specific Settings
+# ============================================================================
+openai:
+  api_version: "2024-02-15-preview"
+  api_base: "https://api.openai.com/v1"
+  organization: ""  # Optional: organization ID
+
+anthropic:
+  api_version: "2024-01-15"
+  timeout: 60
+
+google:
+  api_version: "v1beta"
+  timeout: 60
