@@ -110,5 +110,54 @@
     "error_type": "Exception",
     "error_message": "'GoogleExtractor' object has no attribute '_get_missing_candidate_prompt'",
     "timestamp": "2026-03-23T09:23:06.225176"
+  },
+  {
+    "video_id": "rtHjR6YFr00",
+    "stage": "pipeline",
+    "error_type": "Exception",
+    "error_message": "Invalid operation: The `response.text` quick accessor requires the response to contain a valid `Part`, but none were returned. The candidate's [finish_reason](https://ai.google.dev/api/generate-content#finishreason) is 2.",
+    "timestamp": "2026-03-23T14:36:02.460006"
+  },
+  {
+    "video_id": "rtHjR6YFr00",
+    "stage": "pipeline",
+    "error_type": "Exception",
+    "error_message": "Empty response: line 1 column 1 (char 0)",
+    "timestamp": "2026-03-23T14:40:44.874702"
+  },
+  {
+    "video_id": "rtHjR6YFr00",
+    "stage": "pipeline",
+    "error_type": "Exception",
+    "error_message": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T15:05:56.673609"
+  },
+  {
+    "video_id": "rtHjR6YFr00",
+    "stage": "pipeline",
+    "error_type": "Exception",
+    "error_message": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T16:44:23.171187"
+  },
+  {
+    "video_id": "rtHjR6YFr00",
+    "stage": "pipeline",
+    "error_type": "Exception",
+    "error_message": "name 'os' is not defined",
+    "timestamp": "2026-03-23T16:51:30.573887"
+  },
+  {
+    "video_id": "rtHjR6YFr00",
+    "stage": "pipeline",
+    "error_type": "Exception",
+    "error_message": "'PipelineConfig' object has no attribute 'raw_dir'",
+    "timestamp": "2026-03-23T16:52:19.312256"
+  },
+  {
+    "video_id": "rtHjR6YFr00",
+    "stage": "pipeline",
+    "error_type": "Exception",
+    "error_message": "'PipelineConfig' object has no attribute 'data_raw_dir'",
+    "timestamp": "2026-03-23T16:53:23.908523"
   }
 ]

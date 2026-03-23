@@ -19,7 +19,6 @@ This system implements an **Alternative Data** pipeline for quantitative trading
 - ✅ **Gemini 訊號提取** - Gemini 2.5 Flash + 結構化輸出
 - ✅ **Whisper 保留為 fallback** - 主要轉錄失敗時自動回退
 - ✅ **推薦清單 Feature** - 時間 / 觀看數 / 推薦股票 / label
-- ✅ **台股別名解析** - 「護國神山」→ 2330、「發哥」→ 2454
 - ✅ **成本追蹤** - API 成本即時監控與預算告警
 - ✅ **檢查點機制** - 支援斷點續傳，避免重複處理
 - ✅ **模組化架構** - 易於擴充新分析師、模型、特徵
@@ -44,9 +43,16 @@ cd tw-analyst-signal-pipeline
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
 
-# Or manual setup
+# Or manual setup with conda (recommended)
+conda create -n tw-analyst python=3.10 -y
+conda activate tw-analyst
+pip install -r requirements-dev.txt
+pip install -e .
+
+# Or manual setup with venv
 python3 -m venv venv
 source venv/bin/activate
+pip install -r requirements-dev.txt
 pip install -e .
 
 # Configure environment
@@ -81,10 +87,13 @@ python3 scripts/test_system.py
 python3 scripts/process_video.py "https://www.youtube.com/watch?v=VIDEO_ID"
 
 # Or just video ID
-python3 scripts/process_video.py "VIDEO_ID"
+python3 scripts/process_video.py "VIDEO_ID" --skip-download
 
 # With analyst name
 python3 scripts/process_video.py "VIDEO_ID" --analyst "股市分析師名稱"
+
+# Direct URL extraction with Gemini 2.5 Pro (no download/transcript stage)
+python3 scripts/process_video.py "https://www.youtube.com/watch?v=VIDEO_ID" --direct-youtube --llm-model gemini-2.5-pro
 ```
 
 ## 📊 Output Format
@@ -147,14 +156,9 @@ Stock signals are saved as JSON in `data/signals/`:
 
 ```
 YouTube URL / Video ID
-    ↓ [Fast Track: Cache / YouTube CC]
-  Transcript (if available)
-    ↓ (otherwise fallback)
-  [Audio Downloader (yt-dlp)]
+    ↓ [Audio Downloader (yt-dlp)]
   Audio File
-    ↓ [Gemini Transcriber (default)]
-  Full Transcript (中文逐字稿)
-    ↓ [Gemini 2.5 Flash Extractor]
+    ↓ [Gemini 2.5 Pro/Flash Multimodal Extractor]
   Raw Signals (JSON)
     ↓ [Fugle Stock Validator]
   Validated Signals
@@ -162,7 +166,8 @@ YouTube URL / Video ID
   signals/{video_id}.json + recommendation_list.json
 ```
 
-> 註：目前預設是 **Gemini 轉錄 + Gemini 萃取**。`faster-whisper` 保留作為 fallback 能力，並非主流程必要依賴。
+> 註：目前預設 `LLM_PROVIDER=gemini` 會走 **端到端多模態萃取**（直接讀音訊/影片，不再走 transcript 多階段管線）。
+> 非 Gemini provider 仍可使用 transcript-based 流程。
 
 ### Core Modules
 
@@ -269,14 +274,36 @@ tw-analyst-signal-pipeline/
 ## 🧪 Testing
 
 ```bash
-# Run all system tests
-python3 scripts/test_system.py
+# 0) Activate environment
+conda activate tw-analyst
 
-# Run unit tests
+# 1) Install test dependencies
+pip install -r requirements-dev.txt
+
+# 2) Ensure src package is importable in tests
+pip install -e .
+
+# 3) Run complete test suite
+pytest
+
+# 4) Run only unit tests
 pytest tests/unit/ -v
 
-# Run integration tests (requires API keys)
-pytest tests/integration/ -v --slow
+# 5) Run integration tests (requires API keys)
+pytest tests/integration/ -v -m "integration"
+
+# 6) Optional: skip API-dependent tests
+pytest -m "not requires_api"
+
+# 7) Optional system smoke test script
+python3 scripts/test_system.py
+```
+
+在本機（WSL + conda `tw-analyst`）驗證結果：
+
+```bash
+pytest
+# 2 passed, 1 warning
 ```
 
 ## 🎨 LLM Prompt Engineering

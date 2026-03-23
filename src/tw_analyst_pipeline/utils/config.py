@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"  # openai, anthropic, gemini
     llm_model: str = "gemini-2.5-flash"
     llm_temperature: float = 0.1
-    llm_max_tokens: int = 4000
+    llm_max_tokens: int = 9000
 
     # ========================================================================
     # Speech-to-Text Configuration

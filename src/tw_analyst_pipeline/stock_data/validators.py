@@ -33,11 +33,17 @@ class StockValidator(LoggerMixin):
         """Load valid Taiwan stock codes from CSV files."""
         data_dir = Path(self.settings.data_stock_codes_dir)
 
-        # Create sample stock files if they don't exist
-        self._create_sample_stock_files(data_dir)
+        csv_files = list(data_dir.glob("*.csv"))
+        if not csv_files:
+            self.logger.warning(
+                "No stock code CSV found under %s. Stock validation will reject all local-unknown codes.",
+                data_dir,
+            )
+            return
 
+        loaded_files = 0
         # Load from CSV files
-        for csv_file in data_dir.glob("*.csv"):
+        for csv_file in csv_files:
             try:
                 with open(csv_file, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
@@ -51,11 +57,22 @@ class StockValidator(LoggerMixin):
 
                             if name:
                                 self.stock_names[code] = str(name).strip()
-
-                self.logger.info(f"Loaded {len(self.valid_codes)} valid stock codes")
+                loaded_files += 1
 
             except Exception as e:
                 self.logger.warning(f"Failed to load stock codes from {csv_file}: {e}")
+
+        self.logger.info(
+            "Loaded %s valid stock codes from %s CSV files",
+            len(self.valid_codes),
+            loaded_files,
+        )
+
+        if len(self.valid_codes) < 1000:
+            self.logger.warning(
+                "Stock universe is unusually small (%s). Please provide full TWSE/TPEX/ETF code lists.",
+                len(self.valid_codes),
+            )
 
     def _load_aliases(self):
         """Load stock aliases from JSON file."""
@@ -161,20 +178,21 @@ class StockValidator(LoggerMixin):
             code = code.zfill(4)
 
         local_valid = code in self.valid_codes
-        if not local_valid and re.match(r"^\d{4,5}[A-Z]?$", code):
-            local_valid = True
 
         provider = (self.settings.stock_validation_provider or "local").lower()
 
         if provider != "fugle":
             return local_valid
 
-        if not local_valid:
-            return False
-
         if not self.settings.fugle_api_key:
             self.logger.warning("FUGLE API key not set, fallback to local validation")
             return local_valid
+
+        if local_valid:
+            return True
+
+        if not re.match(r"^\d{4,5}[A-Z]?$", code):
+            return False
 
         return self._validate_with_fugle(code)
 
@@ -227,6 +245,7 @@ class StockValidator(LoggerMixin):
         """
 
         valid_signals = []
+        dropped_count = 0
 
         for signal in signals:
             # Try to resolve stock code
@@ -238,7 +257,7 @@ class StockValidator(LoggerMixin):
                 signal.validation_source = (
                     self.settings.stock_validation_provider or "local"
                 )
-                valid_signals.append(signal)
+                dropped_count += 1
                 continue
 
             signal.validated = True
@@ -247,5 +266,8 @@ class StockValidator(LoggerMixin):
             )
 
             valid_signals.append(signal)
+
+        if dropped_count:
+            self.logger.info("Dropped %s invalid signals during validation", dropped_count)
 
         return valid_signals

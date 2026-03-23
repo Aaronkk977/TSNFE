@@ -90,31 +90,34 @@ def main():
     print("Example 4: Direct Signal Extraction")
     print("=" * 70)
 
-    sample_transcript = """
-    今天我想討論台股的走勢。台積電最近表現不錯，我認為可以加碼，目標價在 1500。
-    聯發科面臨技術面反壓，建議觀望。長榮運價指數下跌，應該減碼。
-    """
+    if settings.llm_provider.lower() in {"gemini", "google"}:
+        print("Gemini/Google 已切換為端到端多模態抽取，請改用 process_video() 或 extract_signals_from_media()。")
+    else:
+        sample_transcript = """
+        今天我想討論台股的走勢。台積電最近表現不錯，我認為可以加碼，目標價在 1500。
+        聯發科面臨技術面反壓，建議觀望。長榮運價指數下跌，應該減碼。
+        """
 
-    print(f"Sample transcript:\n{sample_transcript}\n")
+        print(f"Sample transcript:\n{sample_transcript}\n")
 
-    try:
-        # Use LLM extractor directly
-        analysis = pipeline.llm_extractor.extract_signals(
-            transcript=sample_transcript,
-            video_id="example",
-            analyst_name="示範",
-        )
+        try:
+            # Use LLM extractor directly
+            analysis = pipeline.llm_extractor.extract_signals(
+                transcript=sample_transcript,
+                video_id="example",
+                analyst_name="示範",
+            )
 
-        print(f"Extracted {len(analysis.signals)} signals:\n")
+            print(f"Extracted {len(analysis.signals)} signals:\n")
 
-        for signal in analysis.signals:
-            print(f"• {signal.stock_code} ({signal.stock_name})")
-            print(f"  Action: {signal.action.value} | Confidence: {signal.confidence:.1%}")
-            print(f"  Reason: {signal.reasoning}\n")
+            for signal in analysis.signals:
+                print(f"• {signal.stock_code} ({signal.stock_name})")
+                print(f"  Action: {signal.action.value} | Confidence: {signal.confidence:.1%}")
+                print(f"  Reason: {signal.reasoning}\n")
 
-    except Exception as e:
-        print(f"✗ Extraction failed: {e}")
-        print("  (This is expected if OpenAI API key is not configured)")
+        except Exception as e:
+            print(f"✗ Extraction failed: {e}")
+            print("  (This is expected if API key is not configured)")
 
     # Example 5: Pipeline statistics
     print("\n" + "=" * 70)

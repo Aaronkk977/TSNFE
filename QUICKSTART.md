@@ -63,6 +63,33 @@ python3 scripts/process_video.py "VIDEO_ID" --analyst "分析師名稱"
 - `data/signals/{video_id}.json`
 - `data/signals/recommendation_list.json`
 
+## 5️⃣（可選）Gemini 網頁版 CDP 自動化
+
+當你要直接用已登入的 Gemini 網頁版（@YouTube）時：
+
+1. 在 **Windows PowerShell** 執行：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_chrome_cdp.ps1 -Port 9222 -OpenGemini
+```
+
+若你在 WSL 執行 Python，建議改用：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_chrome_cdp.ps1 -Port 9222 -OpenGemini -BindAll
+```
+
+2. 在 WSL/專案終端執行：
+```bash
+python scripts/process_with_gemini_web.py "https://www.youtube.com/watch?v=VIDEO_ID" --cdp-url http://127.0.0.1:9222
+```
+
+若 `127.0.0.1` 在 WSL 無法連通，改用 Windows Host IP（通常是 `/etc/resolv.conf` 內 `nameserver` 的值）：
+```bash
+python scripts/process_with_gemini_web.py "https://www.youtube.com/watch?v=VIDEO_ID" --cdp-url http://<WINDOWS_HOST_IP>:9222
+```
+
+輸出會寫入：
+- `data/signals/{video_id}_web.json`
+
 ## 📁 重要目錄
 
 | 目錄 | 用途 |

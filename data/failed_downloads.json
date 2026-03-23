@@ -88,5 +88,40 @@
     "video_url": "https://www.youtube.com/watch?v=rtHjR6YFr00",
     "error": "ERROR: The downloaded file is empty",
     "timestamp": "2026-03-23T07:49:23.730613"
+  },
+  {
+    "video_url": "https://www.youtube.com/watch?v=rtHjR6YFr00",
+    "error": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T15:05:49.009432"
+  },
+  {
+    "video_url": "https://www.youtube.com/watch?v=rtHjR6YFr00",
+    "error": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T15:05:52.034972"
+  },
+  {
+    "video_url": "https://www.youtube.com/watch?v=rtHjR6YFr00",
+    "error": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T15:05:56.670016"
+  },
+  {
+    "video_url": "https://www.youtube.com/watch?v=rtHjR6YFr00",
+    "error": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T16:44:15.520902"
+  },
+  {
+    "video_url": "https://www.youtube.com/watch?v=rtHjR6YFr00",
+    "error": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T16:44:18.841782"
+  },
+  {
+    "video_url": "https://www.youtube.com/watch?v=rtHjR6YFr00",
+    "error": "\u001b[0;31mERROR:\u001b[0m [youtube] rtHjR6YFr00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies",
+    "timestamp": "2026-03-23T16:44:23.167570"
+  },
+  {
+    "video_url": "https://www.youtube.com/watch?v=3NeWo6trM6U&t=1s",
+    "error": "[Errno 2] No such file or directory: 'data/raw/3NeWo6trM6U.webm' -> 'data/raw/3NeWo6trM6U.webm'",
+    "timestamp": "2026-03-23T17:36:37.907474"
   }
 ]

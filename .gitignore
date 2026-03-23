@@ -142,6 +142,7 @@ dmypy.json
 .DS_Store
 
 # Project specific
+data/raw/*.part
 data/raw/*.wav
 data/raw/*.mp3
 data/raw/*.m4a
@@ -150,6 +151,8 @@ data/transcripts/*.json
 data/signals/*.json
 data/checkpoints/*.json
 logs/*.log
+logs/*.gz
+logs/*.json
 *.cache
 .cache/
 

@@ -4,6 +4,7 @@ End-to-end processing from YouTube URL to signal extraction
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -21,7 +22,6 @@ from ..transcription import TranscriberFactory
 from ..transcription.whisper_engine import WhisperTranscriber
 from ..utils.config import PipelineConfig, Settings
 from ..utils.logging import LogContext, LoggerMixin
-from ..youtube.browser_ingestor import BrowserMediaIngestor
 from ..youtube.downloader import AudioDownloader
 from ..youtube.fetcher import YouTubeFetcher
 
@@ -51,7 +51,6 @@ class SignalPipeline(LoggerMixin):
         self.config = pipeline_config
 
         # Initialize components
-        self.browser_ingestor = BrowserMediaIngestor(settings)
         self.downloader = AudioDownloader(settings)
         self.transcriber = TranscriberFactory.create(settings)
         self.fallback_transcriber = None
@@ -70,6 +69,7 @@ class SignalPipeline(LoggerMixin):
         video_url: str,
         video_id: Optional[str] = None,
         analyst_name: Optional[str] = None,
+        skip_download: bool = False,
     ) -> Optional[VideoAnalysis]:
         """
         Process a single video from URL to signal extraction.
@@ -78,6 +78,7 @@ class SignalPipeline(LoggerMixin):
             video_url: YouTube video URL or video ID
             video_id: Optional explicit video ID
             analyst_name: Optional analyst name for metadata
+            skip_download: Skip downloading audio if local file exists
 
         Returns:
             VideoAnalysis with extracted signals, or None if processing failed
@@ -94,6 +95,9 @@ class SignalPipeline(LoggerMixin):
             self.logger.info(f"Starting pipeline for: {video_url}")
 
             try:
+                llm_provider = (self.settings.llm_provider or "").lower()
+                use_media_extraction = llm_provider in {"gemini", "google"}
+
                 view_count = None
                 published_at = None
                 if self.youtube_fetcher:
@@ -102,82 +106,69 @@ class SignalPipeline(LoggerMixin):
                         view_count = details[0].view_count
                         published_at = details[0].published_at
 
-                if hasattr(self.llm_extractor, "extract_signals_from_media"):
-                    try:
-                        self.logger.info("Stage 1: Browser automation ingestion")
-                        media_path = self.browser_ingestor.capture(video_url, video_id)
+                if use_media_extraction:
+                    self.logger.info("Stage 1: Handling audio for end-to-end multimodal extraction")
+                    
+                    if skip_download:
+                        audio_path = os.path.join(self.settings.data_raw_dir, f"{video_id}.wav")
+                        if not os.path.exists(audio_path):
+                            raise RuntimeError(f"Skip download requested but file does not exist: {audio_path}")
+                        self.logger.info(f"Using existing local audio: {audio_path}")
+                    else:
+                        audio_path = self.downloader.download(video_url)
+                        if not audio_path:
+                            raise RuntimeError("Failed to download audio")
 
-                        self.logger.info("Stage 2: Multimodal direct extraction")
-                        analysis = self.llm_extractor.extract_signals_from_media(
-                            media_path=media_path,
-                            video_id=video_id,
-                            analyst_name=analyst_name,
-                        )
+                    self.logger.info("Stage 2: Extracting signals directly from media using LLM")
+                    analysis = self.llm_extractor.extract_signals_from_media(
+                        media_path=audio_path,
+                        video_id=video_id,
+                        analyst_name=analyst_name,
+                    )
+                else:
+                    # Stage 1: Fast-track transcript (cache/YouTube CC)
+                    transcript_result = None
+                    if hasattr(self.transcriber, "try_fast_track"):
+                        self.logger.info("Stage 1: Fast-track transcript (cache/YouTube CC)")
+                        transcript_result = self.transcriber.try_fast_track(video_id)
 
-                        self.logger.info("Stage 3: Validating signals")
-                        if self.settings.validate_stock_codes:
-                            analysis.signals = self.validator.resolve_signals(analysis.signals)
+                    # Stage 2: Audio pipeline fallback
+                    if not transcript_result:
+                        self.logger.info("Stage 2: Handling audio")
+                        
+                        if skip_download:
+                            audio_path = os.path.join(self.settings.data_raw_dir, f"{video_id}.wav")
+                            if not os.path.exists(audio_path):
+                                raise RuntimeError(f"Skip download requested but file does not exist: {audio_path}")
+                            self.logger.info(f"Using existing local audio: {audio_path}")
+                        else:
+                            audio_path = self.downloader.download(video_url)
+                            if not audio_path:
+                                raise RuntimeError("Failed to download audio")
 
-                        analysis.video_view_count = view_count
-                        analysis.video_published_at = published_at
-                        labels = [
-                            normalize_label(sig.normalized_label or sig.implied_label)
-                            for sig in analysis.signals
-                        ]
-                        analysis.normalized_label = self._majority_label(labels)
-                        analysis.recommendation_feature = self._build_recommendation_feature(analysis)
+                        self.logger.info("Stage 3: Transcribing audio")
+                        try:
+                            transcript_result = self.transcriber.transcribe(audio_path, video_id)
+                        except Exception as e:
+                            self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
+                            if self.fallback_transcriber is None:
+                                self.fallback_transcriber = WhisperTranscriber(self.settings)
+                            transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id)
+                    if not transcript_result or not transcript_result.text:
+                        raise RuntimeError("Failed to transcribe audio")
 
-                        self.logger.info("Stage 4: Saving results")
-                        self._save_analysis(analysis)
+                    self.logger.info(
+                        f"Transcript ready: {len(transcript_result.text)} chars, "
+                        f"{len(transcript_result.segments)} segments"
+                    )
 
-                        total_time = time.time() - pipeline_start
-                        analysis.processing_duration_seconds = total_time
-                        self.logger.info(
-                            f"✓ Pipeline completed in {total_time:.1f}s "
-                            f"({len(analysis.signals)} signals extracted)"
-                        )
-                        return analysis
-                    except Exception as direct_error:
-                        self.logger.warning(
-                            f"Direct multimodal path failed, fallback to transcript path: {direct_error}"
-                        )
-
-                # Stage 1: Fast-track transcript (cache/YouTube CC)
-                transcript_result = None
-                if hasattr(self.transcriber, "try_fast_track"):
-                    self.logger.info("Stage 1: Fast-track transcript (cache/YouTube CC)")
-                    transcript_result = self.transcriber.try_fast_track(video_id)
-
-                # Stage 2: Audio pipeline fallback
-                if not transcript_result:
-                    self.logger.info("Stage 2: Downloading audio")
-                    audio_path = self.downloader.download(video_url)
-                    if not audio_path:
-                        raise RuntimeError("Failed to download audio")
-
-                    self.logger.info("Stage 3: Transcribing audio")
-                    try:
-                        transcript_result = self.transcriber.transcribe(audio_path, video_id)
-                    except Exception as e:
-                        self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
-                        if self.fallback_transcriber is None:
-                            self.fallback_transcriber = WhisperTranscriber(self.settings)
-                        transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id)
-                if not transcript_result or not transcript_result.text:
-                    raise RuntimeError("Failed to transcribe audio")
-
-                self.logger.info(
-                    f"Transcript ready: {len(transcript_result.text)} chars, "
-                    f"{len(transcript_result.segments)} segments"
-                )
-
-                # Stage 4: Extract signals
-                self.logger.info("Stage 4: Extracting signals using LLM")
-                analysis = self.llm_extractor.extract_signals(
-                    transcript=transcript_result.text,
-                    video_id=video_id,
-                    analyst_name=analyst_name,
-                )
+                    # Stage 4: Extract signals
+                    self.logger.info("Stage 4: Extracting signals using LLM")
+                    analysis = self.llm_extractor.extract_signals(
+                        transcript=transcript_result.text,
+                        video_id=video_id,
+                        analyst_name=analyst_name,
+                    )
 
                 # Stage 5: Validate
                 self.logger.info("Stage 5: Validating signals")

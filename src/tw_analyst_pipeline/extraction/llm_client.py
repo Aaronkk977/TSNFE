@@ -98,20 +98,71 @@ class BaseLLMExtractor(LoggerMixin):
             if match:
                 return json.loads(match.group(1))
 
-            # Extract first JSON array/object block if model added prose
-            array_start = cleaned.find("[")
-            array_end = cleaned.rfind("]")
-            if array_start != -1 and array_end > array_start:
-                candidate = cleaned[array_start:array_end + 1]
-                return json.loads(candidate)
+            array_candidate = BaseLLMExtractor._extract_balanced_json_block(cleaned, "[")
+            if array_candidate:
+                return json.loads(array_candidate)
 
-            obj_start = cleaned.find("{")
-            obj_end = cleaned.rfind("}")
-            if obj_start != -1 and obj_end > obj_start:
-                candidate = cleaned[obj_start:obj_end + 1]
-                return json.loads(candidate)
+            object_candidate = BaseLLMExtractor._extract_balanced_json_block(cleaned, "{")
+            if object_candidate:
+                return json.loads(object_candidate)
+
+            for opening_char in ("[", "{"):
+                start = cleaned.find(opening_char)
+                if start == -1:
+                    continue
+                try:
+                    parsed_obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+                    return parsed_obj
+                except Exception:
+                    continue
 
             raise
+
+    @staticmethod
+    def _extract_balanced_json_block(text: str, opening_char: str) -> Optional[str]:
+        if opening_char not in {"[", "{"}:
+            return None
+
+        closing_char = "]" if opening_char == "[" else "}"
+        start = text.find(opening_char)
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for index in range(start, len(text)):
+            char = text[index]
+
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+
+            if char == opening_char:
+                depth += 1
+            elif char == closing_char:
+                depth -= 1
+                if depth == 0:
+                    return text[start:index + 1]
+
+        return None
+
+    def _get_api_timeout_seconds(self) -> int:
+        timeout = self.config.get("extraction.api_timeout_seconds", 300)
+        try:
+            timeout = int(timeout)
+        except (TypeError, ValueError):
+            timeout = 300
+        return max(30, timeout)
 
     @staticmethod
     def _escape_newlines_in_json_strings(text: str) -> str:
@@ -137,6 +188,24 @@ class BaseLLMExtractor(LoggerMixin):
             out.append(ch)
         return "".join(out)
 
+    @staticmethod
+    def _get_response_text_safe(response) -> str:
+        try:
+            text = response.text
+            if text:
+                return text.strip()
+        except Exception:
+            pass
+
+        chunks = []
+        for cand in getattr(response, "candidates", []) or []:
+            content = getattr(cand, "content", None)
+            parts = getattr(content, "parts", []) if content else []
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    chunks.append(part_text)
+        return "\n".join(chunks).strip()
 
 class OpenAIExtractor(BaseLLMExtractor):
     """Extract signals using OpenAI GPT-4o-mini."""
@@ -268,7 +337,6 @@ class AnthropicExtractor(BaseLLMExtractor):
 
         if not settings.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY not set")
-
         self.client = Anthropic(api_key=settings.anthropic_api_key)
         self.logger.info("Anthropic client initialized")
 
@@ -360,160 +428,62 @@ class GoogleExtractor(BaseLLMExtractor):
         video_id: str,
         analyst_name: Optional[str] = None,
     ) -> VideoAnalysis:
-        """Extract signals using Google Generative AI."""
+        """Transcript mode is intentionally disabled for GoogleExtractor."""
+        self.logger.error(
+            "GoogleExtractor.extract_signals() is disabled. "
+            "Use extract_signals_from_media(media_path=...) for end-to-end multimodal extraction."
+        )
+        raise RuntimeError(
+            "Google transcript extraction pipeline is disabled. "
+            "Please call extract_signals_from_media()."
+        )
 
-        self.logger.info(f"Extracting signals from {video_id} using Google AI")
-        start_time = time.time()
+    def _fallback_extract_signals_data(
+        self,
+        model,
+        system_prompt: str,
+        transcript: str,
+        seed_tickers: List[str],
+    ):
+        import google.generativeai as genai
 
-        try:
-            import google.generativeai as genai
+        seed_text = ", ".join(seed_tickers[:20]) if seed_tickers else "無"
+        fallback_prompt = f"""
+請根據逐字稿提取台股標的訊號，輸出 JSON 陣列。
 
-            system_prompt = self._get_system_prompt()
+每筆格式：
+{{
+  "ticker": "代號",
+  "stock_name": "名稱",
+  "sentiment_score": 0-10,
+  "urgency": 0-10,
+  "label": "買進|賣出|中立（持有）|模糊",
+  "label_reason": "標籤理由",
+  "reasoning": "簡短依據"
+}}
 
-            model_name = (
-                self.config.get("extraction.models.gemini")
-                or self.settings.llm_model
-                or "gemini-2.5-flash"
-            )
-            model = genai.GenerativeModel(model_name)
+已偵測代號（參考）：{seed_text}
 
-            seed_tickers = self._extract_ticker_mentions(transcript)
-            candidates = self._extract_candidates_with_llm(
-                model=model,
-                system_prompt=system_prompt,
-                transcript=transcript,
-                seed_tickers=seed_tickers,
-            )
-            allowed_tickers = {
-                self._normalize_ticker(item.get("ticker", ""))
-                for item in candidates
-                if self._normalize_ticker(item.get("ticker", ""))
-            }
+逐字稿：
+{transcript}
 
-            response = model.generate_content(
-                [
-                    system_prompt,
-                    self._get_quant_prompt(
-                        transcript=transcript,
-                        candidates=candidates,
-                        seed_tickers=seed_tickers,
-                    ),
-                ],
-                generation_config=genai.types.GenerationConfig(
-                    temperature=self.settings.llm_temperature,
-                    max_output_tokens=self.settings.llm_max_tokens,
-                    response_mime_type="application/json",
-                ),
-            )
+只輸出 JSON，不要其他說明。
+""".strip()
 
-            # Parse response
-            response_text = (getattr(response, "text", None) or "").strip()
-            if not response_text:
-                try:
-                    chunks = []
-                    for cand in getattr(response, "candidates", []) or []:
-                        content = getattr(cand, "content", None)
-                        parts = getattr(content, "parts", []) if content else []
-                        for part in parts:
-                            part_text = getattr(part, "text", None)
-                            if part_text:
-                                chunks.append(part_text)
-                    response_text = "\n".join(chunks).strip()
-                except Exception:
-                    response_text = ""
+        fallback_response = model.generate_content(
+            [system_prompt, fallback_prompt],
+            generation_config=genai.types.GenerationConfig(
+                temperature=self.settings.llm_temperature,
+                max_output_tokens=max(1200, int(self.settings.llm_max_tokens * 0.7)),
+            ),
+        )
 
-            signals_data = self._safe_parse_json(response_text)
+        fallback_text = self._get_response_text_safe(fallback_response)
+        if not fallback_text:
+            self.logger.warning("Fallback extraction still returned empty response")
+            return []
 
-            if not isinstance(signals_data, list):
-                signals_data = [signals_data]
-
-            if allowed_tickers:
-                raw_count = len(signals_data)
-                signals_data = [
-                    item for item in signals_data
-                    if self._normalize_ticker(item.get("ticker", "")) in allowed_tickers
-                ]
-                if len(signals_data) < raw_count:
-                    self.logger.warning(
-                        "Filtered {} hallucinated signals not present in transcript candidates",
-                        raw_count - len(signals_data),
-                    )
-
-            signals_data = self._ensure_candidate_coverage(
-                model=model,
-                system_prompt=system_prompt,
-                transcript=transcript,
-                candidates=candidates,
-                signals_data=signals_data,
-            )
-
-            signals = []
-            overall_sentiment = []
-            overall_urgency = []
-            labels = []
-            for item in signals_data:
-                stock_code = str(item.get("ticker", "")).strip().upper()
-                if stock_code.isdigit():
-                    stock_code = stock_code.zfill(4)
-                raw_label = item.get("label") or item.get("implied_label") or "中立"
-                sentiment = float(item.get("sentiment_score", 5.0))
-                urgency = float(item.get("urgency", 5.0))
-                confidence = max(0.0, min(1.0, (sentiment + urgency) / 20.0))
-                normalized = normalize_label(raw_label)
-                labels.append(normalized)
-                overall_sentiment.append(sentiment)
-                overall_urgency.append(urgency)
-
-                try:
-                    signals.append(
-                        StockSignal(
-                            stock_code=stock_code,
-                            stock_name=item.get("stock_name") or item.get("ticker") or stock_code,
-                            action=self._action_from_label(raw_label),
-                            confidence=confidence,
-                            reasoning=item.get("reasoning", ""),
-                            sentiment_score=sentiment,
-                            urgency=urgency,
-                            implied_label=raw_label,
-                            normalized_label=normalized,
-                            label_reason=item.get("label_reason") or item.get("reasoning", ""),
-                        )
-                    )
-                except ValidationError as ve:
-                    self.logger.warning(
-                        "Skip invalid signal item: {} | item={}"
-                        , str(ve), str(item)[:200]
-                    )
-                    continue
-
-            processing_time = time.time() - start_time
-            normalized_label = self._majority_label(labels)
-
-            result = VideoAnalysis(
-                video_id=video_id,
-                analyst_name=analyst_name,
-                signals=signals,
-                transcript_length_chars=len(transcript),
-                processing_duration_seconds=processing_time,
-                confidence_score=self._calculate_confidence(signals),
-                sentiment_score=(sum(overall_sentiment) / len(overall_sentiment)) if overall_sentiment else None,
-                urgency=(sum(overall_urgency) / len(overall_urgency)) if overall_urgency else None,
-                implied_label=normalized_label,
-                normalized_label=normalized_label,
-            )
-
-            self.logger.info(
-                f"Extracted {len(signals)} signals in {processing_time:.1f}s"
-            )
-            return result
-
-        except Exception as e:
-            preview = response_text[:200] if "response_text" in locals() else ""
-            self.logger.error(
-                "Failed to extract signals: {} | response_preview={}"
-                , str(e), preview
-            )
-            raise
+        return self._safe_parse_json(fallback_text)
 
     @retry_with_backoff(max_attempts=3, exceptions=(Exception,))
     def extract_signals_from_media(
@@ -536,94 +506,98 @@ class GoogleExtractor(BaseLLMExtractor):
                 or self.settings.llm_model
                 or "gemini-2.5-flash"
             )
-            model = genai.GenerativeModel(model_name)
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=self._get_system_prompt()
+            )
+            timeout_seconds = self._get_api_timeout_seconds()
 
+            self.logger.info(
+                "Uploading media file for multimodal extraction: {}",
+                str(media_path),
+            )
             uploaded_file = genai.upload_file(path=str(media_path))
+            
+            # Wait for the file to be processed with timeout
+            self.logger.info("Waiting for uploaded media to become active...")
+            wait_start = time.time()
+            while True:
+                f = genai.get_file(uploaded_file.name)
+                if f.state.name == "ACTIVE":
+                    break
+                if f.state.name == "FAILED":
+                    raise Exception("File processing failed on Gemini servers.")
+                if time.time() - wait_start > 120:
+                    raise Exception("Timeout waiting for file to become active.")
+                time.sleep(2)
+
+            self.logger.info(
+                "Media upload completed and active, requesting Gemini inference (timeout={}s, max_tokens={}, mode={})",
+                timeout_seconds,
+                self.settings.llm_max_tokens,
+                model_name
+            )
+            
+            gen_config = genai.types.GenerationConfig(
+                temperature=self.settings.llm_temperature,
+                max_output_tokens=self.settings.llm_max_tokens,
+            )
+            
             response = model.generate_content(
-                [self._get_system_prompt(), self._get_multimodal_prompt(), uploaded_file],
-                generation_config=genai.types.GenerationConfig(
-                    temperature=self.settings.llm_temperature,
-                    max_output_tokens=self.settings.llm_max_tokens,
-                    response_mime_type="application/json",
-                ),
+                [uploaded_file, self._get_multimodal_prompt()],
+                generation_config=gen_config,
+                request_options={"timeout": timeout_seconds},
             )
 
-            response_text = (getattr(response, "text", None) or "").strip()
+            # --- Log raw response to a debug file to answer user request ---
+            try:
+                import json
+                debug_log_path = "logs/last_gemini_multimodal_response.json"
+                import os
+                os.makedirs("logs", exist_ok=True)
+                with open(debug_log_path, "w", encoding="utf-8") as f:
+                    # Attempt to dump the raw to_dict() if available, else str()
+                    resp_dict = getattr(response, "to_dict", lambda: {"raw": str(response)})()
+                    json.dump(resp_dict, f, ensure_ascii=False, indent=2)
+                self.logger.info(f"Raw Gemini response dumped to {debug_log_path}")
+            except Exception as dump_err:
+                self.logger.warning(f"Could not dump raw gemini response: {dump_err}")
+            # ---------------------------------------------------------------
+
+            response_text = self._get_response_text_safe(response)
+            
             if not response_text:
-                chunks = []
-                for cand in getattr(response, "candidates", []) or []:
-                    content = getattr(cand, "content", None)
-                    parts = getattr(content, "parts", []) if content else []
-                    for part in parts:
-                        part_text = getattr(part, "text", None)
-                        if part_text:
-                            chunks.append(part_text)
-                response_text = "\n".join(chunks).strip()
+                finish_reason = ""
+                safety_ratings = ""
+                try:
+                    finish_reason = response.candidates[0].finish_reason if getattr(response, "candidates", None) else ""
+                    safety_ratings = response.candidates[0].safety_ratings if getattr(response, "candidates", None) else ""
+                except Exception:
+                    pass
+                self.logger.warning(
+                    f"Empty response from Gemini. finish_reason: {finish_reason}, safety_ratings: {safety_ratings}, prompt_feedback: {getattr(response, 'prompt_feedback', '')}"
+                )
+
+            self.logger.info(
+                "Gemini multimodal response received ({} chars)",
+                len(response_text or ""),
+            )
 
             signals_data = self._safe_parse_json(response_text)
             if not isinstance(signals_data, list):
                 signals_data = [signals_data]
 
-            signals = []
-            overall_sentiment = []
-            overall_urgency = []
-            labels = []
-
-            for item in signals_data:
-                stock_code = str(item.get("ticker", "")).strip().upper()
-                if stock_code.isdigit():
-                    stock_code = stock_code.zfill(4)
-
-                raw_label = item.get("label") or item.get("implied_label") or "模糊"
-                sentiment = float(item.get("sentiment_score", 5.0))
-                urgency = float(item.get("urgency", 5.0))
-                confidence = max(0.0, min(1.0, (sentiment + urgency) / 20.0))
-                normalized = normalize_label(raw_label)
-
-                labels.append(normalized)
-                overall_sentiment.append(sentiment)
-                overall_urgency.append(urgency)
-
-                try:
-                    signals.append(
-                        StockSignal(
-                            stock_code=stock_code,
-                            stock_name=item.get("stock_name") or stock_code,
-                            action=self._action_from_label(raw_label),
-                            confidence=confidence,
-                            reasoning=item.get("reasoning", ""),
-                            sentiment_score=sentiment,
-                            urgency=urgency,
-                            implied_label=raw_label,
-                            normalized_label=normalized,
-                            label_reason=item.get("label_reason") or item.get("reasoning", ""),
-                        )
-                    )
-                except ValidationError as ve:
-                    self.logger.warning(
-                        "Skip invalid multimodal signal: {} | item={}"
-                        , str(ve), str(item)[:200]
-                    )
-
-            processing_time = time.time() - start_time
-            normalized_label = self._majority_label(labels)
-
-            result = VideoAnalysis(
+            result = self._build_analysis_from_signals_data(
+                signals_data=signals_data,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                signals=signals,
+                processing_time=time.time() - start_time,
                 transcript_length_chars=None,
-                processing_duration_seconds=processing_time,
-                confidence_score=self._calculate_confidence(signals),
-                sentiment_score=(sum(overall_sentiment) / len(overall_sentiment)) if overall_sentiment else None,
-                urgency=(sum(overall_urgency) / len(overall_urgency)) if overall_urgency else None,
-                implied_label=normalized_label,
-                normalized_label=normalized_label,
             )
 
             self.logger.info(
-                f"Direct multimodal extraction done in {processing_time:.1f}s "
-                f"({len(signals)} signals)"
+                f"Direct multimodal extraction done in {result.processing_duration_seconds:.1f}s "
+                f"({len(result.signals)} signals)"
             )
             return result
 
@@ -636,6 +610,133 @@ class GoogleExtractor(BaseLLMExtractor):
                     genai.delete_file(uploaded_file.name)
                 except Exception:
                     pass
+
+    @retry_with_backoff(max_attempts=3, exceptions=(Exception,))
+    def extract_signals_from_youtube_url(
+        self,
+        youtube_url: str,
+        video_id: str,
+        analyst_name: Optional[str] = None,
+    ) -> VideoAnalysis:
+        """Extract signals directly from YouTube URL using Gemini URL understanding."""
+
+        self.logger.info(f"Direct multimodal extraction from YouTube URL: {video_id}")
+        start_time = time.time()
+
+        try:
+            import google.generativeai as genai
+
+            model_name = (
+                self.config.get("extraction.models.gemini")
+                or self.settings.llm_model
+                or "gemini-2.5-flash"
+            )
+            model = genai.GenerativeModel(model_name)
+            timeout_seconds = self._get_api_timeout_seconds()
+
+            self.logger.info(
+                "Requesting Gemini URL multimodal extraction (timeout={}s)",
+                timeout_seconds,
+            )
+            response = model.generate_content(
+                [
+                    self._get_system_prompt(),
+                    self._get_youtube_url_multimodal_prompt(youtube_url=youtube_url),
+                ],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=self.settings.llm_temperature,
+                    max_output_tokens=self.settings.llm_max_tokens,
+                    response_mime_type="application/json",
+                ),
+                request_options={"timeout": timeout_seconds},
+            )
+
+            response_text = self._get_response_text_safe(response)
+            self.logger.info(
+                "Gemini URL response received ({} chars)",
+                len(response_text or ""),
+            )
+            signals_data = self._safe_parse_json(response_text)
+            if not isinstance(signals_data, list):
+                signals_data = [signals_data]
+
+            result = self._build_analysis_from_signals_data(
+                signals_data=signals_data,
+                video_id=video_id,
+                analyst_name=analyst_name,
+                processing_time=time.time() - start_time,
+                transcript_length_chars=None,
+            )
+
+            self.logger.info(
+                f"YouTube URL multimodal extraction done in {result.processing_duration_seconds:.1f}s "
+                f"({len(result.signals)} signals)"
+            )
+            return result
+
+        except Exception as e:
+            self.logger.error(f"YouTube URL multimodal extraction failed: {e}")
+            raise
+
+    def _build_analysis_from_signals_data(
+        self,
+        signals_data: List[dict],
+        video_id: str,
+        analyst_name: Optional[str],
+        processing_time: float,
+        transcript_length_chars: Optional[int],
+    ) -> VideoAnalysis:
+        signals = []
+        overall_sentiment = []
+        overall_urgency = []
+        labels = []
+
+        for item in signals_data:
+            stock_code = str(item.get("ticker", "")).strip().upper()
+            if stock_code.isdigit():
+                stock_code = stock_code.zfill(4)
+
+            raw_label = item.get("label") or item.get("implied_label") or "模糊"
+            confidence = 1.0 # Set default confidence to 1.0 as requested
+            normalized = normalize_label(raw_label)
+
+            labels.append(normalized)
+
+            try:
+                signals.append(
+                    StockSignal(
+                        stock_code=stock_code,
+                        stock_name=item.get("stock_name") or stock_code,
+                        action=self._action_from_label(raw_label),
+                        confidence=confidence,
+                        reasoning=item.get("reasoning", ""),
+                        sentiment_score=None,
+                        urgency=None,
+                        implied_label=raw_label,
+                        normalized_label=normalized,
+                        label_reason=item.get("label_reason") or item.get("reasoning", ""),
+                    )
+                )
+            except ValidationError as ve:
+                self.logger.warning(
+                    "Skip invalid multimodal signal: {} | item={}"
+                    , str(ve), str(item)[:200]
+                )
+
+        normalized_label = self._majority_label(labels)
+
+        return VideoAnalysis(
+            video_id=video_id,
+            analyst_name=analyst_name,
+            signals=signals,
+            transcript_length_chars=transcript_length_chars,
+            processing_duration_seconds=processing_time,
+            confidence_score=self._calculate_confidence(signals),
+            sentiment_score=None,
+            urgency=None,
+            implied_label=normalized_label,
+            normalized_label=normalized_label,
+        )
 
     @staticmethod
     def _normalize_ticker(raw_ticker: str) -> str:
@@ -704,17 +805,7 @@ class GoogleExtractor(BaseLLMExtractor):
             ),
         )
 
-        response_text = (getattr(response, "text", None) or "").strip()
-        if not response_text:
-            chunks = []
-            for cand in getattr(response, "candidates", []) or []:
-                content = getattr(cand, "content", None)
-                parts = getattr(content, "parts", []) if content else []
-                for part in parts:
-                    part_text = getattr(part, "text", None)
-                    if part_text:
-                        chunks.append(part_text)
-            response_text = "\n".join(chunks).strip()
+        response_text = self._get_response_text_safe(response)
 
         candidate_data = self._safe_parse_json(response_text)
         if not isinstance(candidate_data, list):
@@ -833,17 +924,7 @@ class GoogleExtractor(BaseLLMExtractor):
             ),
         )
 
-        response_text = (getattr(response, "text", None) or "").strip()
-        if not response_text:
-            chunks = []
-            for cand in getattr(response, "candidates", []) or []:
-                content = getattr(cand, "content", None)
-                parts = getattr(content, "parts", []) if content else []
-                for part in parts:
-                    part_text = getattr(part, "text", None)
-                    if part_text:
-                        chunks.append(part_text)
-            response_text = "\n".join(chunks).strip()
+        response_text = self._get_response_text_safe(response)
 
         data = self._safe_parse_json(response_text)
         if not isinstance(data, list):
@@ -941,8 +1022,6 @@ class GoogleExtractor(BaseLLMExtractor):
 {{
     "ticker": "股票代號",
     "stock_name": "標的名稱",
-    "sentiment_score": 0-10,
-    "urgency": 0-10,
     "reasoning": "簡短依據",
     "label": "買進|賣出|中立（持有）|模糊",
     "label_reason": "判定標籤原因"
@@ -957,26 +1036,54 @@ class GoogleExtractor(BaseLLMExtractor):
 {transcript}
 """.strip()
 
-        def _get_multimodal_prompt(self) -> str:
-                return """
+    def _get_multimodal_prompt(self) -> str:
+        prompt_template = self.config.get("prompts.multimodal_prompt", "")
+        if not prompt_template:
+            prompt_template = """
 你將直接觀看/聆聽上傳的影片或音訊，請一次性完成台股標的結構化評分。
 
 請輸出 JSON 陣列，每筆格式：
 {
     "ticker": "股票代號(4~5碼，可含尾碼字母)",
     "stock_name": "標的名稱",
-    "sentiment_score": 0-10,
-    "urgency": 0-10,
-    "reasoning": "簡短依據（<=60字）",
+    "reasoning": "簡短依據（<=40字）",
     "label": "買進|賣出|中立（持有）|模糊",
-    "label_reason": "標籤理由（20~60字）"
+    "label_reason": "標籤理由（20~40字）"
 }
 
 規則：
 - 全量提取所有被提及可交易標的（股票/ETF/槓反ETF）。
 - 若態度不明，label 必須為「模糊」，不能省略。
+- 嚴格排除「年份/年代/價格/數量」等數字（例如 1987、1970、1000）作為 ticker。
+- 若 stock_name 與 ticker 對不上（例如 2002 卻填威剛），該筆不得輸出。
 - 僅輸出 JSON，不要其他文字。
-""".strip()
+"""
+        return prompt_template.strip()
+
+    def _get_youtube_url_multimodal_prompt(self, youtube_url: str) -> str:
+        prompt_template = self.config.get("prompts.youtube_url_multimodal_prompt", "")
+        if not prompt_template:
+            prompt_template = """
+請直接觀看/理解以下 YouTube 影片網址內容，並完成台股標的結構化評分：
+{youtube_url}
+
+請輸出 JSON 陣列，每筆格式：
+{{
+    "ticker": "股票代號(4~5碼，可含尾碼字母)",
+    "stock_name": "標的名稱",
+    "reasoning": "簡短依據（<=40字）",
+    "label": "買進|賣出|中立（持有）|模糊",
+    "label_reason": "標籤理由（20~40字）"
+}}
+
+規則：
+- 全量提取所有被提及可交易標的（股票/ETF/槓反ETF）。
+- 若態度不明，label 必須為「模糊」，不能省略。
+- 嚴格排除「年份/年代/價格/數量」等數字（例如 1987、1970、1000）作為 ticker。
+- 若 stock_name 與 ticker 對不上（例如 2002 卻填威剛），該筆不得輸出。
+- 僅輸出 JSON，不要其他文字。
+"""
+        return prompt_template.format(youtube_url=youtube_url).strip()
 
 
 class LLMExtractorFactory:
