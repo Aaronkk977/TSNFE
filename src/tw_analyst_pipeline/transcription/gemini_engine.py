@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 import google.generativeai as genai
+from youtube_transcript_api import YouTubeTranscriptApi
 
 from ..extraction.schemas import TranscriptResult
 from ..utils.config import Settings
@@ -88,6 +89,67 @@ class GeminiTranscriber(LoggerMixin):
                     genai.delete_file(uploaded_file.name)
                 except Exception:
                     pass
+
+    def try_fast_track(self, video_id: str) -> Optional[TranscriptResult]:
+        """Fast-track: cache -> YouTube CC subtitle API. Return None on failure."""
+        if not video_id:
+            return None
+
+        # Cache first
+        cached = self.load_transcript(video_id)
+        if cached and cached.text:
+            self.logger.info(f"Fast-track cache hit: {video_id}")
+            return cached
+
+        start_time = time.time()
+        try:
+            api = YouTubeTranscriptApi()
+            transcript_items = api.fetch(
+                video_id,
+                languages=["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"],
+            )
+            segments = []
+            text_chunks = []
+
+            for i, item in enumerate(transcript_items):
+                seg_text = (getattr(item, "text", "") or "").strip()
+                if not seg_text:
+                    continue
+                start_sec = float(getattr(item, "start", 0.0) or 0.0)
+                duration = float(getattr(item, "duration", 0.0) or 0.0)
+                segments.append(
+                    {
+                        "id": i,
+                        "start": start_sec,
+                        "end": start_sec + duration if duration > 0 else None,
+                        "text": seg_text,
+                        "confidence": None,
+                    }
+                )
+                text_chunks.append(seg_text)
+
+            full_text = "\n".join(text_chunks).strip()
+            if not full_text:
+                return None
+
+            result = TranscriptResult(
+                video_id=video_id,
+                text=full_text,
+                segments=segments,
+                language="zh",
+                duration_seconds=(segments[-1]["end"] if segments and segments[-1]["end"] else None),
+                processing_time_seconds=time.time() - start_time,
+            )
+            self._save_transcript(result)
+            self.logger.info(
+                f"Fast-track transcript success: {video_id} "
+                f"({len(full_text)} chars, {len(segments)} segments)"
+            )
+            return result
+
+        except Exception as e:
+            self.logger.info(f"Fast-track transcript unavailable for {video_id}: {e}")
+            return None
 
     def _save_transcript(self, result: TranscriptResult) -> Path:
         output_file = self.output_dir / f"{result.video_id}.json"

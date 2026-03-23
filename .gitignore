@@ -2,6 +2,13 @@
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -150,3 +157,6 @@ logs/*.log
 *.tmp
 temp/
 tmp/
+
+# Local Git hooks output/logs
+.githooks/*.log

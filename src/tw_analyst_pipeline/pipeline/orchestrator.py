@@ -21,6 +21,7 @@ from ..transcription import TranscriberFactory
 from ..transcription.whisper_engine import WhisperTranscriber
 from ..utils.config import PipelineConfig, Settings
 from ..utils.logging import LogContext, LoggerMixin
+from ..youtube.browser_ingestor import BrowserMediaIngestor
 from ..youtube.downloader import AudioDownloader
 from ..youtube.fetcher import YouTubeFetcher
 
@@ -50,9 +51,10 @@ class SignalPipeline(LoggerMixin):
         self.config = pipeline_config
 
         # Initialize components
+        self.browser_ingestor = BrowserMediaIngestor(settings)
         self.downloader = AudioDownloader(settings)
         self.transcriber = TranscriberFactory.create(settings)
-        self.fallback_transcriber = WhisperTranscriber(settings)
+        self.fallback_transcriber = None
         self.validator = StockValidator(settings)
         self.llm_extractor = LLMExtractorFactory.create(settings, pipeline_config)
         self.youtube_fetcher = None
@@ -100,19 +102,67 @@ class SignalPipeline(LoggerMixin):
                         view_count = details[0].view_count
                         published_at = details[0].published_at
 
-                # Stage 1: Download
-                self.logger.info("Stage 1: Downloading audio")
-                audio_path = self.downloader.download(video_url)
-                if not audio_path:
-                    raise RuntimeError("Failed to download audio")
+                if hasattr(self.llm_extractor, "extract_signals_from_media"):
+                    try:
+                        self.logger.info("Stage 1: Browser automation ingestion")
+                        media_path = self.browser_ingestor.capture(video_url, video_id)
 
-                # Stage 2: Transcribe
-                self.logger.info("Stage 2: Transcribing audio")
-                try:
-                    transcript_result = self.transcriber.transcribe(audio_path, video_id)
-                except Exception as e:
-                    self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
-                    transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id)
+                        self.logger.info("Stage 2: Multimodal direct extraction")
+                        analysis = self.llm_extractor.extract_signals_from_media(
+                            media_path=media_path,
+                            video_id=video_id,
+                            analyst_name=analyst_name,
+                        )
+
+                        self.logger.info("Stage 3: Validating signals")
+                        if self.settings.validate_stock_codes:
+                            analysis.signals = self.validator.resolve_signals(analysis.signals)
+
+                        analysis.video_view_count = view_count
+                        analysis.video_published_at = published_at
+                        labels = [
+                            normalize_label(sig.normalized_label or sig.implied_label)
+                            for sig in analysis.signals
+                        ]
+                        analysis.normalized_label = self._majority_label(labels)
+                        analysis.recommendation_feature = self._build_recommendation_feature(analysis)
+
+                        self.logger.info("Stage 4: Saving results")
+                        self._save_analysis(analysis)
+
+                        total_time = time.time() - pipeline_start
+                        analysis.processing_duration_seconds = total_time
+                        self.logger.info(
+                            f"✓ Pipeline completed in {total_time:.1f}s "
+                            f"({len(analysis.signals)} signals extracted)"
+                        )
+                        return analysis
+                    except Exception as direct_error:
+                        self.logger.warning(
+                            f"Direct multimodal path failed, fallback to transcript path: {direct_error}"
+                        )
+
+                # Stage 1: Fast-track transcript (cache/YouTube CC)
+                transcript_result = None
+                if hasattr(self.transcriber, "try_fast_track"):
+                    self.logger.info("Stage 1: Fast-track transcript (cache/YouTube CC)")
+                    transcript_result = self.transcriber.try_fast_track(video_id)
+
+                # Stage 2: Audio pipeline fallback
+                if not transcript_result:
+                    self.logger.info("Stage 2: Downloading audio")
+                    audio_path = self.downloader.download(video_url)
+                    if not audio_path:
+                        raise RuntimeError("Failed to download audio")
+
+                    self.logger.info("Stage 3: Transcribing audio")
+                    try:
+                        transcript_result = self.transcriber.transcribe(audio_path, video_id)
+                    except Exception as e:
+                        self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
+                        if self.fallback_transcriber is None:
+                            self.fallback_transcriber = WhisperTranscriber(self.settings)
+                        transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id)
                 if not transcript_result or not transcript_result.text:
                     raise RuntimeError("Failed to transcribe audio")
 
@@ -121,28 +171,30 @@ class SignalPipeline(LoggerMixin):
                     f"{len(transcript_result.segments)} segments"
                 )
 
-                # Stage 3: Extract signals
-                self.logger.info("Stage 3: Extracting signals using LLM")
+                # Stage 4: Extract signals
+                self.logger.info("Stage 4: Extracting signals using LLM")
                 analysis = self.llm_extractor.extract_signals(
                     transcript=transcript_result.text,
                     video_id=video_id,
                     analyst_name=analyst_name,
                 )
 
-                # Stage 4: Validate
-                self.logger.info("Stage 4: Validating signals")
+                # Stage 5: Validate
+                self.logger.info("Stage 5: Validating signals")
                 if self.settings.validate_stock_codes:
                     analysis.signals = self.validator.resolve_signals(analysis.signals)
 
                 analysis.video_view_count = view_count
                 analysis.video_published_at = published_at
-                analysis.normalized_label = normalize_label(
-                    analysis.normalized_label or analysis.implied_label
-                )
+                labels = [
+                    normalize_label(sig.normalized_label or sig.implied_label)
+                    for sig in analysis.signals
+                ]
+                analysis.normalized_label = self._majority_label(labels)
                 analysis.recommendation_feature = self._build_recommendation_feature(analysis)
 
-                # Stage 5: Save results
-                self.logger.info("Stage 5: Saving results")
+                # Stage 6: Save results
+                self.logger.info("Stage 6: Saving results")
                 self._save_analysis(analysis)
 
                 # Total processing time
@@ -284,6 +336,25 @@ class SignalPipeline(LoggerMixin):
             recommended_stocks=recommended,
             label=analysis.normalized_label or "中立",
         )
+
+    def _filter_ambiguous_signals(self, signals):
+        filtered = [
+            signal for signal in signals
+            if normalize_label(signal.normalized_label or signal.implied_label) != "模糊"
+        ]
+        removed = len(signals) - len(filtered)
+        if removed > 0:
+            self.logger.info(f"Filtered {removed} ambiguous signals in post-processing")
+        return filtered
+
+    @staticmethod
+    def _majority_label(labels: List[str]) -> str:
+        if not labels:
+            return "中立"
+        counts = {"買進": 0, "中立": 0, "賣出": 0, "模糊": 0}
+        for label in labels:
+            counts[label] = counts.get(label, 0) + 1
+        return max(counts.items(), key=lambda item: item[1])[0]
 
     def _update_recommendation_list(self, analysis: VideoAnalysis):
         list_file = self.settings.data_signals_dir / "recommendation_list.json"

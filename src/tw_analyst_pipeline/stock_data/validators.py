@@ -5,6 +5,7 @@ Handles stock code validation and nickname mapping
 
 import csv
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -155,8 +156,14 @@ class StockValidator(LoggerMixin):
         if not code:
             return False
 
-        code = str(code).strip().zfill(4)
+        code = str(code).strip().upper()
+        if code.isdigit():
+            code = code.zfill(4)
+
         local_valid = code in self.valid_codes
+        if not local_valid and re.match(r"^\d{4,5}[A-Z]?$", code):
+            local_valid = True
+
         provider = (self.settings.stock_validation_provider or "local").lower()
 
         if provider != "fugle":
@@ -203,7 +210,9 @@ class StockValidator(LoggerMixin):
 
     def get_stock_name(self, code: str) -> Optional[str]:
         """Get stock name for a code."""
-        code = str(code).strip().zfill(4)
+        code = str(code).strip().upper()
+        if code.isdigit():
+            code = code.zfill(4)
         return self.stock_names.get(code)
 
     def resolve_signals(self, signals: List) -> List:
@@ -225,6 +234,11 @@ class StockValidator(LoggerMixin):
                 self.logger.warning(
                     f"Invalid stock code: {signal.stock_code} ({signal.stock_name})"
                 )
+                signal.validated = False
+                signal.validation_source = (
+                    self.settings.stock_validation_provider or "local"
+                )
+                valid_signals.append(signal)
                 continue
 
             signal.validated = True

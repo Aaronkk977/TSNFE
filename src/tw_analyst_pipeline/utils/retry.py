@@ -6,8 +6,6 @@ Handles exponential backoff and custom retry logic
 from typing import Callable, Optional, Type, Union
 
 from tenacity import (
-    after_log,
-    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -47,6 +45,28 @@ def retry_with_backoff(
 
     log_func = logger_instance or logger
 
+    def _before_sleep(retry_state):
+        exc = retry_state.outcome.exception() if retry_state.outcome else None
+        sleep_s = getattr(getattr(retry_state, "next_action", None), "sleep", None)
+        fn_name = getattr(retry_state.fn, "__qualname__", str(retry_state.fn))
+        log_func.warning(
+            "Retrying {} in {} seconds (attempt {}): {}",
+            fn_name,
+            sleep_s,
+            retry_state.attempt_number,
+            repr(exc),
+        )
+
+    def _after(retry_state):
+        fn_name = getattr(retry_state.fn, "__qualname__", str(retry_state.fn))
+        elapsed = getattr(retry_state, "seconds_since_start", 0.0)
+        log_func.info(
+            "Finished call to {} after {:.1f}s (attempt {})",
+            fn_name,
+            elapsed,
+            retry_state.attempt_number,
+        )
+
     def decorator(func: Callable) -> Callable:
         return retry(
             stop=stop_after_attempt(max_attempts),
@@ -56,8 +76,8 @@ def retry_with_backoff(
                 max=backoff_max,
             ),
             retry=retry_if_exception_type(exceptions),
-            before_sleep=before_sleep_log(log_func, log_level="WARNING"),
-            after=after_log(log_func, log_level="INFO"),
+            before_sleep=_before_sleep,
+            after=_after,
             reraise=True,
         )(func)
 

@@ -20,7 +20,7 @@ class TradeAction(str, Enum):
 
 
 def normalize_label(label: Optional[str]) -> str:
-    """Normalize label to Chinese label set: 買進/中立/賣出."""
+    """Normalize label to Chinese label set: 買進/中立/賣出/模糊."""
     if not label:
         return "中立"
 
@@ -34,6 +34,9 @@ def normalize_label(label: Optional[str]) -> str:
     hold_aliases = {
         "hold", "neutral", "中立", "觀望", "持有", "wait"
     }
+    ambiguous_aliases = {
+        "ambiguous", "unclear", "mixed", "模糊", "不明", "不確定"
+    }
 
     if normalized in buy_aliases:
         return "買進"
@@ -41,13 +44,15 @@ def normalize_label(label: Optional[str]) -> str:
         return "賣出"
     if normalized in hold_aliases:
         return "中立"
+    if normalized in ambiguous_aliases:
+        return "模糊"
     return "中立"
 
 
 class StockSignal(BaseModel):
     """Single stock signal extracted from analyst video."""
 
-    stock_code: str = Field(..., pattern=r"^\d{4}$", description="4-digit Taiwan stock code")
+    stock_code: str = Field(..., pattern=r"^\d{4,5}[A-Z]?$", description="Taiwan stock code")
     stock_name: str = Field(..., description="Stock name or company name")
     action: TradeAction = Field(..., description="Trading action: buy, sell, or hold")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
@@ -65,7 +70,12 @@ class StockSignal(BaseModel):
     implied_label: Optional[str] = Field(None, description="Raw label from LLM")
     normalized_label: Optional[str] = Field(
         None,
-        description="Normalized Chinese label: 買進/中立/賣出",
+        description="Normalized Chinese label: 買進/中立/賣出/模糊",
+    )
+    label_reason: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Reason for assigned label",
     )
     validated: bool = Field(default=False, description="Validated by stock data API")
     validation_source: Optional[str] = Field(
@@ -108,7 +118,7 @@ class VideoAnalysis(BaseModel):
     implied_label: Optional[str] = Field(None, description="Raw overall label")
     normalized_label: Optional[str] = Field(
         None,
-        description="Normalized overall label: 買進/中立/賣出",
+        description="Normalized overall label: 買進/中立/賣出/模糊",
     )
     video_view_count: Optional[int] = Field(None, ge=0)
     video_published_at: Optional[str] = Field(None)
@@ -159,7 +169,7 @@ class TranscriptResult(BaseModel):
 class RecommendationStock(BaseModel):
     """Stock item for recommendation feature list."""
 
-    stock_code: str = Field(..., pattern=r"^\d{4}$")
+    stock_code: str = Field(..., pattern=r"^\d{4,5}[A-Z]?$")
     stock_name: str = Field(...)
     label: str = Field(..., description="買進/中立/賣出")
 

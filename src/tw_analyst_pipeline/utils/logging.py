@@ -34,6 +34,9 @@ def setup_logging(
         Configured logger object
     """
 
+    # Idempotent setup: clear existing handlers to avoid duplicate logs
+    logger.remove()
+
     # Create log directory
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)

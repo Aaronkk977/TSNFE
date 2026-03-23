@@ -3,6 +3,7 @@
 
 # YouTube & Download
 yt-dlp>=2024.0.0
+youtube-transcript-api>=0.6.2
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
 google-auth-httplib2>=0.2.0
@@ -27,15 +28,4 @@ tenacity>=8.2.3
 loguru>=0.7.0
 pyyaml>=6.0
 requests>=2.31.0
-tqdm>=4.66.0
-
-# Framework support
-langchain>=0.1.0
-langchain-openai>=0.0.5
-
-# Audio Processing
-ffmpeg-python>=0.2.0
-librosa>=0.10.0
-
-# Chinese Text Processing
-opencc-python-reimplemented>=0.1.7
+playwright>=1.46.0

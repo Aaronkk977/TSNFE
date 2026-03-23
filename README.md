@@ -1,21 +1,23 @@
 # Taiwan Analyst Signal Pipeline
 
-A production-grade quantitative trading data pipeline that automatically extracts stock buy/sell signals from Taiwan stock analyst YouTube videos using AI-powered speech recognition and language models.
+A production-grade quantitative trading data pipeline that automatically extracts stock buy/sell signals from Taiwan stock analyst YouTube videos using Gemini + structured LLM extraction.
 
 ## 🎯 Project Overview
 
 This system implements an **Alternative Data** pipeline for quantitative trading that:
 
 1. **自動監控** YouTube 投顧分析師頻道
-2. **智能轉錄** 使用 Gemini 2.5 Flash 將影片音檔轉為繁中逐字稿
-3. **結構化萃取** 呼叫 Gemini 2.5 Flash 提取個股推薦訊號
+2. **智能轉錄** 以 Gemini 2.5 Flash 完成繁中逐字稿
+3. **結構化萃取** 以 Gemini 2.5 Flash 提取個股推薦訊號
 4. **量化驗證** 以 Fugle API 驗證股票代碼真實存在
 5. **即時保存** 訊號為可供回測的結構化格式
 
 ### Key Features
 
-- ✅ **Gemini 語音轉錄** - Gemini 2.5 Flash 音訊理解
+- ✅ **Gemini 轉錄為預設流程** - 目前 pipeline 預設 `TRANSCRIPTION_PROVIDER=gemini`
+- ✅ **Fast Track 字幕快取** - 優先使用 YouTube CC（`youtube-transcript-api`），失敗再回退
 - ✅ **Gemini 訊號提取** - Gemini 2.5 Flash + 結構化輸出
+- ✅ **Whisper 保留為 fallback** - 主要轉錄失敗時自動回退
 - ✅ **推薦清單 Feature** - 時間 / 觀看數 / 推薦股票 / label
 - ✅ **台股別名解析** - 「護國神山」→ 2330、「發哥」→ 2454
 - ✅ **成本追蹤** - API 成本即時監控與預算告警
@@ -27,7 +29,7 @@ This system implements an **Alternative Data** pipeline for quantitative trading
 ### Prerequisites
 
 - Python 3.10+
-- NVIDIA GPU (建議 6GB+ VRAM)，或 CPU（較慢）
+- NVIDIA GPU（僅在使用 Whisper fallback 時建議）
 - API Keys:
   - YouTube Data API v3
   - Google AI API (Gemini)
@@ -51,6 +53,20 @@ pip install -e .
 cp .env.example .env
 # Edit .env and add your API keys
 ```
+
+### API Key Safety (必做)
+
+```bash
+# 啟用本專案 pre-commit hook（避免誤 commit 金鑰）
+git config core.hooksPath .githooks
+
+# 若曾誤追蹤 .env，先從索引移除（不刪本機檔）
+git rm --cached .env 2>/dev/null || true
+```
+
+- 真實金鑰只放在 `.env`（已被 `.gitignore` 忽略）
+- `.env.example` 只保留 placeholder
+- 若 key 曾外洩，請立即到供應商後台 rotate
 
 ### Run System Tests
 
@@ -130,10 +146,13 @@ Stock signals are saved as JSON in `data/signals/`:
 ## 🏗️ Architecture
 
 ```
-YouTube URL
-    ↓ [YouTube Downloader]
-  Audio File (WAV)
-    ↓ [Gemini Transcriber]
+YouTube URL / Video ID
+    ↓ [Fast Track: Cache / YouTube CC]
+  Transcript (if available)
+    ↓ (otherwise fallback)
+  [Audio Downloader (yt-dlp)]
+  Audio File
+    ↓ [Gemini Transcriber (default)]
   Full Transcript (中文逐字稿)
     ↓ [Gemini 2.5 Flash Extractor]
   Raw Signals (JSON)
@@ -143,12 +162,14 @@ YouTube URL
   signals/{video_id}.json + recommendation_list.json
 ```
 
+> 註：目前預設是 **Gemini 轉錄 + Gemini 萃取**。`faster-whisper` 保留作為 fallback 能力，並非主流程必要依賴。
+
 ### Core Modules
 
 | Module | Purpose | Key Classes |
 |--------|---------|------------|
 | `youtube/` | YouTube 下載 | `AudioDownloader` |
-| `transcription/` | 語音轉文字 | `GeminiTranscriber`, `WhisperTranscriber` |
+| `transcription/` | 語音轉文字 | `GeminiTranscriber` (default), `WhisperTranscriber` (fallback) |
 | `extraction/` | LLM 訊號萃取 | `GoogleExtractor`, `LLMExtractorFactory` |
 | `stock_data/` | 股票驗證 | `StockValidator` |
 | `pipeline/` | 主流程編排 | `SignalPipeline` |
@@ -188,13 +209,13 @@ ENABLE_COST_TRACKING=true
 
 主要的管線參數配置，包括：
 - 重試策略（retry logic）
-- Whisper 模型參數
+- Gemini / Whisper 轉錄參數
 - LLM 提取提示詞
 - 輸出格式與目錄
 
 ## 📈 Performance Metrics
 
-- **轉錄速度**: ~10-15分鐘影片 → 2-3分鐘 (GPU, medium 模型)
+- **轉錄速度**: 取決於 Gemini API 回應時間與影片長度
 - **LLM 萃取**: ~30-50 tokens 平均消耗 per signal
 - **API 成本**: 視 Gemini/Fugle 用量而定
 - **訊號準確度**: ~85-95% (取決於分析師的清楚度)
@@ -294,8 +315,9 @@ pytest tests/integration/ -v --slow
 
 ### Technology Stack
 
-- **Whisper**: https://github.com/openai/whisper
-- **faster-whisper**: https://github.com/guillaumekln/faster-whisper
+- **Google Gemini API**: https://ai.google.dev/
+- **Whisper (fallback)**: https://github.com/openai/whisper
+- **faster-whisper (fallback)**: https://github.com/guillaumekln/faster-whisper
 - **instructor**: https://github.com/jxnl/instructor
 - **OpenAI API**: https://platform.openai.com/docs
 - **yt-dlp**: https://github.com/yt-dlp/yt-dlp
