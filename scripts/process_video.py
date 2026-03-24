@@ -59,14 +59,28 @@ def main():
         help="Skip audio download (use cached file)",
     )
     parser.add_argument(
+        "--mode",
+        type=str,
+        default=None,
+        choices=["audio", "url", "text"],
+        help="Processing mode: audio (default), url, text",
+    )
+    parser.add_argument(
+        "--text-source",
+        type=str,
+        default=None,
+        choices=["auto", "cc", "gemini"],
+        help="Transcript source for text mode: auto, cc, gemini",
+    )
+    parser.add_argument(
         "--direct-youtube",
         action="store_true",
-        help="Use Gemini direct YouTube URL extraction (no audio download/transcript)",
+        help="Backward-compatible alias of --mode url",
     )
     parser.add_argument(
         "--llm-model",
         type=str,
-        default="gemini-2.5-pro",
+        default=None,
         help="Override LLM model (e.g. gemini-2.5-pro)",
     )
 
@@ -80,8 +94,28 @@ def main():
         settings = get_settings()
         if args.llm_model:
             settings.llm_model = args.llm_model
+            try:
+                settings.model_fields_set.add("llm_model")
+            except Exception:
+                pass
         pipeline_config = get_pipeline_config()
         pipeline = SignalPipeline(settings, pipeline_config)
+
+        default_mode = str(pipeline_config.get("execution.mode", "audio") or "audio").lower()
+        default_text_source = str(
+            pipeline_config.get("execution.text_transcript_source", "auto") or "auto"
+        ).lower()
+
+        mode = (args.mode or default_mode).lower()
+        if args.direct_youtube:
+            mode = "url"
+
+        text_source = (args.text_source or default_text_source).lower()
+
+        if mode not in {"audio", "url", "text"}:
+            raise ValueError(f"Invalid mode: {mode}")
+        if text_source not in {"auto", "cc", "gemini"}:
+            raise ValueError(f"Invalid text source: {text_source}")
 
     except Exception as e:
         print(f"✗ Failed to initialize pipeline: {e}")
@@ -91,28 +125,27 @@ def main():
     try:
         print(f"\n{'=' * 70}")
         print(f"Processing: {args.video_url}")
+        print(f"Mode: {mode}")
+        if mode == "text":
+            print(f"Text source: {text_source}")
+        resolved_model = settings.llm_model
+        extractor = getattr(pipeline, "llm_extractor", None)
+        if extractor and hasattr(extractor, "_resolve_gemini_model_name"):
+            try:
+                resolved_model = extractor._resolve_gemini_model_name()
+            except Exception:
+                pass
+        print(f"LLM model: {resolved_model}")
         print(f"{'=' * 70}\n")
 
-        if args.direct_youtube:
-            extractor = pipeline.llm_extractor
-            if not hasattr(extractor, "extract_signals_from_youtube_url"):
-                raise RuntimeError(
-                    "Current provider does not support direct YouTube URL extraction. "
-                    "Please use --direct-youtube only with Gemini/Google provider."
-                )
-
-            video_id = _extract_video_id_no_network(args.video_url)
-            analysis = extractor.extract_signals_from_youtube_url(
-                youtube_url=args.video_url,
-                video_id=video_id,
-                analyst_name=args.analyst,
-            )
-        else:
-            analysis = pipeline.process_video(
-                video_url=args.video_url,
-                analyst_name=args.analyst,
-                skip_download=args.skip_download,
-            )
+        analysis = pipeline.process_video(
+            video_url=args.video_url,
+            video_id=_extract_video_id_no_network(args.video_url),
+            analyst_name=args.analyst,
+            skip_download=args.skip_download,
+            mode=mode,
+            text_transcript_source=text_source,
+        )
 
         if analysis:
             print(f"\n{'=' * 70}")

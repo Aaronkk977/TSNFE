@@ -36,6 +36,11 @@ python scripts/test_system.py
 
 ```bash
 python scripts/process_video.py "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# 三種模式
+python scripts/process_video.py "VIDEO_ID" --mode audio
+python scripts/process_video.py "VIDEO_ID" --mode url
+python scripts/process_video.py "VIDEO_ID" --mode text --text-source auto
 ```
 
 ## 5. 主要輸出位置
@@ -67,3 +72,13 @@ WSL / 專案終端：
 ```bash
 python scripts/process_with_gemini_web.py "https://www.youtube.com/watch?v=VIDEO_ID" --cdp-url http://127.0.0.1:9222
 ```
+
+## 8. 產出分析師 × 股票矩陣（可選）
+
+```bash
+python scripts/daily_analyst_table.py --mode text --text-source auto --days-back 2 --max-videos 1
+```
+
+輸出：
+- `data/reports/analyst_stock_matrix.md`
+- `data/reports/analyst_stock_matrix.csv`

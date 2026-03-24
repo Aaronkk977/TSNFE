@@ -4,6 +4,7 @@ Supports OpenAI, Anthropic, and Google Generative AI
 """
 
 import json
+import os
 import time
 import re
 from typing import List, Optional, Type, Union
@@ -206,6 +207,112 @@ class BaseLLMExtractor(LoggerMixin):
                 if part_text:
                     chunks.append(part_text)
         return "\n".join(chunks).strip()
+
+    def _resolve_gemini_model_name(self) -> str:
+        """Resolve Gemini model with precedence: runtime/env -> config -> default."""
+        settings_model = (self.settings.llm_model or "").strip()
+        settings_fields = getattr(self.settings, "model_fields_set", set())
+        if settings_model and "llm_model" in settings_fields:
+            return settings_model
+
+        env_model = (os.getenv("LLM_MODEL") or "").strip()
+        if env_model:
+            return env_model
+
+        config_model = (self.config.get("extraction.models.gemini") or "").strip()
+        if config_model:
+            return config_model
+
+        if settings_model:
+            return settings_model
+
+        return "gemini-2.5-flash"
+
+    @staticmethod
+    def _read_usage_metadata_tokens(response) -> tuple[int, int]:
+        """Extract prompt/output tokens from Gemini usage metadata."""
+        usage = getattr(response, "usage_metadata", None)
+        if usage is None:
+            return 0, 0
+
+        if isinstance(usage, dict):
+            prompt_tokens = int(usage.get("prompt_token_count", 0) or 0)
+            output_tokens = int(usage.get("candidates_token_count", 0) or 0)
+            return prompt_tokens, output_tokens
+
+        prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+        output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+        return prompt_tokens, output_tokens
+
+    def _estimate_gemini_cost_usd(
+        self,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> float:
+        """Estimate Gemini API cost by model and token usage."""
+        pricing = self.config.get("extraction.pricing.gemini", {}) or {}
+        model_key = model_name.lower()
+
+        flash_input = float(pricing.get("flash_input_per_million_usd", 0.30))
+        flash_output = float(pricing.get("flash_output_per_million_usd", 2.50))
+
+        pro_input = float(pricing.get("pro_input_per_million_usd", 1.25))
+        pro_output = float(pricing.get("pro_output_per_million_usd", 10.00))
+
+        pro_long_threshold = int(pricing.get("pro_long_context_threshold_tokens", 200_000))
+        pro_long_input = float(pricing.get("pro_long_input_per_million_usd", 2.50))
+        pro_long_output = float(pricing.get("pro_long_output_per_million_usd", 15.00))
+
+        if "pro" in model_key:
+            if max(0, input_tokens) > pro_long_threshold:
+                input_per_million = pro_long_input
+                output_per_million = pro_long_output
+            else:
+                input_per_million = pro_input
+                output_per_million = pro_output
+        else:
+            input_per_million = flash_input
+            output_per_million = flash_output
+
+        return (
+            (max(0, input_tokens) / 1_000_000) * input_per_million
+            + (max(0, output_tokens) / 1_000_000) * output_per_million
+        )
+
+    def _track_gemini_cost(
+        self,
+        video_id: str,
+        model_name: str,
+        response,
+        processing_time: float,
+        signals_extracted: int,
+    ):
+        """Track Gemini usage/cost metrics for pipeline statistics."""
+        input_tokens, output_tokens = self._read_usage_metadata_tokens(response)
+        estimated_usd = self._estimate_gemini_cost_usd(
+            model_name=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+        metric = CostMetrics(
+            video_id=video_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_usd=estimated_usd,
+            processing_time_seconds=processing_time,
+            signals_extracted=signals_extracted,
+        )
+        self.cost_metrics.append(metric)
+
+        self.logger.info(
+            "Gemini cost tracked: model={}, in_tokens={}, out_tokens={}, est=${:.6f}",
+            model_name,
+            input_tokens,
+            output_tokens,
+            estimated_usd,
+        )
 
 class OpenAIExtractor(BaseLLMExtractor):
     """Extract signals using OpenAI GPT-4o-mini."""
@@ -428,15 +535,63 @@ class GoogleExtractor(BaseLLMExtractor):
         video_id: str,
         analyst_name: Optional[str] = None,
     ) -> VideoAnalysis:
-        """Transcript mode is intentionally disabled for GoogleExtractor."""
-        self.logger.error(
-            "GoogleExtractor.extract_signals() is disabled. "
-            "Use extract_signals_from_media(media_path=...) for end-to-end multimodal extraction."
-        )
-        raise RuntimeError(
-            "Google transcript extraction pipeline is disabled. "
-            "Please call extract_signals_from_media()."
-        )
+        """Extract signals from transcript text using Gemini."""
+
+        self.logger.info(f"Text-based extraction from transcript: {video_id}")
+        start_time = time.time()
+
+        try:
+            import google.generativeai as genai
+
+            model_name = self._resolve_gemini_model_name()
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=self._get_system_prompt(),
+            )
+
+            timeout_seconds = self._get_api_timeout_seconds()
+            prompt = self._get_extraction_prompt(transcript)
+
+            response = model.generate_content(
+                [prompt],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=self.settings.llm_temperature,
+                    max_output_tokens=self.settings.llm_max_tokens,
+                    response_mime_type="application/json",
+                ),
+                request_options={"timeout": timeout_seconds},
+            )
+
+            response_text = self._get_response_text_safe(response)
+            signals_data = self._safe_parse_json(response_text)
+            if not isinstance(signals_data, list):
+                signals_data = [signals_data]
+
+            result = self._build_analysis_from_signals_data(
+                signals_data=signals_data,
+                video_id=video_id,
+                analyst_name=analyst_name,
+                processing_time=time.time() - start_time,
+                transcript_length_chars=len(transcript),
+            )
+
+            self._track_gemini_cost(
+                video_id=video_id,
+                model_name=model_name,
+                response=response,
+                processing_time=result.processing_duration_seconds or (time.time() - start_time),
+                signals_extracted=len(result.signals),
+            )
+
+            self.logger.info(
+                f"Text extraction done in {result.processing_duration_seconds:.1f}s "
+                f"({len(result.signals)} signals)"
+            )
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Text extraction failed: {e}")
+            raise
 
     def _fallback_extract_signals_data(
         self,
@@ -501,11 +656,7 @@ class GoogleExtractor(BaseLLMExtractor):
         try:
             import google.generativeai as genai
 
-            model_name = (
-                self.config.get("extraction.models.gemini")
-                or self.settings.llm_model
-                or "gemini-2.5-flash"
-            )
+            model_name = self._resolve_gemini_model_name()
             model = genai.GenerativeModel(
                 model_name=model_name,
                 system_instruction=self._get_system_prompt()
@@ -594,6 +745,14 @@ class GoogleExtractor(BaseLLMExtractor):
                 transcript_length_chars=None,
             )
 
+            self._track_gemini_cost(
+                video_id=video_id,
+                model_name=model_name,
+                response=response,
+                processing_time=result.processing_duration_seconds or (time.time() - start_time),
+                signals_extracted=len(result.signals),
+            )
+
             self.logger.info(
                 f"Direct multimodal extraction done in {result.processing_duration_seconds:.1f}s "
                 f"({len(result.signals)} signals)"
@@ -625,11 +784,7 @@ class GoogleExtractor(BaseLLMExtractor):
         try:
             import google.generativeai as genai
 
-            model_name = (
-                self.config.get("extraction.models.gemini")
-                or self.settings.llm_model
-                or "gemini-2.5-flash"
-            )
+            model_name = self._resolve_gemini_model_name()
             model = genai.GenerativeModel(model_name)
             timeout_seconds = self._get_api_timeout_seconds()
 
@@ -667,6 +822,14 @@ class GoogleExtractor(BaseLLMExtractor):
                 transcript_length_chars=None,
             )
 
+            self._track_gemini_cost(
+                video_id=video_id,
+                model_name=model_name,
+                response=response,
+                processing_time=result.processing_duration_seconds or (time.time() - start_time),
+                signals_extracted=len(result.signals),
+            )
+
             self.logger.info(
                 f"YouTube URL multimodal extraction done in {result.processing_duration_seconds:.1f}s "
                 f"({len(result.signals)} signals)"
@@ -691,11 +854,21 @@ class GoogleExtractor(BaseLLMExtractor):
         labels = []
 
         for item in signals_data:
-            stock_code = str(item.get("ticker", "")).strip().upper()
+            raw_stock_code = item.get("ticker") or item.get("stock_code") or ""
+            stock_code = str(raw_stock_code).strip().upper()
             if stock_code.isdigit():
                 stock_code = stock_code.zfill(4)
 
-            raw_label = item.get("label") or item.get("implied_label") or "模糊"
+            raw_action = str(item.get("action", "")).strip().lower()
+            mapped_label = ""
+            if raw_action == "buy":
+                mapped_label = "買進"
+            elif raw_action == "sell":
+                mapped_label = "賣出"
+            elif raw_action == "hold":
+                mapped_label = "中立"
+
+            raw_label = item.get("label") or item.get("implied_label") or mapped_label or "模糊"
             confidence = 1.0 # Set default confidence to 1.0 as requested
             normalized = normalize_label(raw_label)
 
@@ -707,7 +880,7 @@ class GoogleExtractor(BaseLLMExtractor):
                         stock_code=stock_code,
                         stock_name=item.get("stock_name") or stock_code,
                         action=self._action_from_label(raw_label),
-                        confidence=confidence,
+                        confidence=float(item.get("confidence", confidence) or confidence),
                         reasoning=item.get("reasoning", ""),
                         sentiment_score=None,
                         urgency=None,

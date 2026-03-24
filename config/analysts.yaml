@@ -1,0 +1,7 @@
+# Daily analyst list for automation
+# You can add more analysts in the same format.
+analysts:
+  - name: "郭哲榮分析師"
+    channel: "@s178"
+  - name: "林鈺凱分析師"
+    channel: "@win16888"

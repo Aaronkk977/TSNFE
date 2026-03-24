@@ -107,6 +107,7 @@ class Settings(BaseSettings):
             Path(self.data_dir) / "errors",
             Path(self.data_dir) / "metadata",
             Path(self.data_dir) / "debug",
+            Path(self.data_dir) / "reports",
             Path(self.log_dir),
         ]
         for directory in directories:
@@ -143,6 +144,10 @@ class Settings(BaseSettings):
     @property
     def data_debug_dir(self) -> Path:
         return Path(self.data_dir) / "debug"
+
+    @property
+    def data_reports_dir(self) -> Path:
+        return Path(self.data_dir) / "reports"
 
     @property
     def logs_dir(self) -> Path:

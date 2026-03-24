@@ -27,6 +27,21 @@ pipeline:
   cleanup_temp_files: true
 
 # ============================================================================
+# Execution Interface (single control plane for runtime behavior)
+# ============================================================================
+execution:
+  # audio: 下載音檔後多模態萃取（預設、最穩）
+  # url: 直接讀 YouTube 連結（較不穩）
+  # text: 先產出逐字稿，再用 LLM 讀文字
+  mode: "audio"
+
+  # 僅 mode=text 使用
+  # auto: 先快取/CC，失敗再用轉錄
+  # cc: 只用快取/YouTube CC
+  # gemini: 直接用轉錄產文字
+  text_transcript_source: "auto"
+
+# ============================================================================
 # YouTube Configuration
 # ============================================================================
 youtube:
@@ -96,8 +111,6 @@ extraction:
   
   # Model selection per provider
   models:
-    openai: "gpt-4o-mini"           # gpt-4o for higher quality
-    anthropic: "claude-3-sonnet-20240229"
     gemini: "gemini-2.5-pro"
   
   # Temperature (0.0-1.0)
@@ -115,6 +128,20 @@ extraction:
   # Cost tracking
   track_tokens: true
   daily_budget_usd: 100.0
+
+  # Optional pricing override (USD / 1M tokens)
+  # Used by Pipeline Statistics cost estimation
+  pricing:
+    gemini:
+      flash_input_per_million_usd: 0.30
+      flash_output_per_million_usd: 2.50
+
+      pro_input_per_million_usd: 1.25
+      pro_output_per_million_usd: 10.00
+
+      pro_long_context_threshold_tokens: 200000
+      pro_long_input_per_million_usd: 2.50
+      pro_long_output_per_million_usd: 15.00
   
   # Fallback LLM provider (if primary fails)
   fallback_provider: "null"          # Can be "openai", "anthropic", etc.

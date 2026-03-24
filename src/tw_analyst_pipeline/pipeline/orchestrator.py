@@ -70,6 +70,8 @@ class SignalPipeline(LoggerMixin):
         video_id: Optional[str] = None,
         analyst_name: Optional[str] = None,
         skip_download: bool = False,
+        mode: str = "audio",
+        text_transcript_source: str = "auto",
     ) -> Optional[VideoAnalysis]:
         """
         Process a single video from URL to signal extraction.
@@ -97,6 +99,15 @@ class SignalPipeline(LoggerMixin):
             try:
                 llm_provider = (self.settings.llm_provider or "").lower()
                 use_media_extraction = llm_provider in {"gemini", "google"}
+                mode = (mode or "audio").lower()
+                text_transcript_source = (text_transcript_source or "auto").lower()
+
+                if mode not in {"audio", "url", "text"}:
+                    raise ValueError(f"Unsupported mode: {mode}")
+                if text_transcript_source not in {"auto", "cc", "gemini"}:
+                    raise ValueError(
+                        f"Unsupported text_transcript_source: {text_transcript_source}"
+                    )
 
                 view_count = None
                 published_at = None
@@ -106,7 +117,20 @@ class SignalPipeline(LoggerMixin):
                         view_count = details[0].view_count
                         published_at = details[0].published_at
 
-                if use_media_extraction:
+                if mode == "url":
+                    if not hasattr(self.llm_extractor, "extract_signals_from_youtube_url"):
+                        raise RuntimeError(
+                            "Current provider does not support URL extraction. "
+                            "Please use mode='audio' or mode='text'."
+                        )
+                    self.logger.info("Stage 1: Extracting signals directly from YouTube URL")
+                    analysis = self.llm_extractor.extract_signals_from_youtube_url(
+                        youtube_url=video_url,
+                        video_id=video_id,
+                        analyst_name=analyst_name,
+                    )
+
+                elif mode == "audio" and use_media_extraction:
                     self.logger.info("Stage 1: Handling audio for end-to-end multimodal extraction")
                     
                     if skip_download:
@@ -128,12 +152,14 @@ class SignalPipeline(LoggerMixin):
                 else:
                     # Stage 1: Fast-track transcript (cache/YouTube CC)
                     transcript_result = None
-                    if hasattr(self.transcriber, "try_fast_track"):
+                    should_try_cc = text_transcript_source in {"auto", "cc"}
+                    if should_try_cc and hasattr(self.transcriber, "try_fast_track"):
                         self.logger.info("Stage 1: Fast-track transcript (cache/YouTube CC)")
                         transcript_result = self.transcriber.try_fast_track(video_id)
 
                     # Stage 2: Audio pipeline fallback
-                    if not transcript_result:
+                    should_transcribe = text_transcript_source in {"auto", "gemini"}
+                    if not transcript_result and should_transcribe:
                         self.logger.info("Stage 2: Handling audio")
                         
                         if skip_download:
@@ -151,9 +177,10 @@ class SignalPipeline(LoggerMixin):
                             transcript_result = self.transcriber.transcribe(audio_path, video_id)
                         except Exception as e:
                             self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
-                            if self.fallback_transcriber is None:
-                                self.fallback_transcriber = WhisperTranscriber(self.settings)
-                            transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id)
+                            if text_transcript_source == "auto":
+                                if self.fallback_transcriber is None:
+                                    self.fallback_transcriber = WhisperTranscriber(self.settings)
+                                transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id)
                     if not transcript_result or not transcript_result.text:
                         raise RuntimeError("Failed to transcribe audio")
 

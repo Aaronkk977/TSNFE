@@ -22,6 +22,7 @@
 - `data/errors/`：失敗記錄（下載/處理）。
 - `data/metadata/`：抓取清單與輔助 metadata。
 - `data/debug/`：除錯輸出（例如 LLM 原始回應）。
+- `data/reports/`：自動化報表輸出（矩陣表、每日摘要）。
 
 ## 3) 已完成的整理
 
