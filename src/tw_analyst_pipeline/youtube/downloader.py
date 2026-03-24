@@ -21,7 +21,7 @@ class AudioDownloader(LoggerMixin):
     def __init__(self, settings: Settings):
         self.settings = settings
         self.output_dir = Path(settings.data_raw_dir)
-        self.failed_downloads_log = Path(settings.data_dir) / "failed_downloads.json"
+        self.failed_downloads_log = settings.data_errors_dir / "failed_downloads.json"
 
     def _get_ydl_opts(self) -> dict:
         """Get yt-dlp options for audio extraction."""

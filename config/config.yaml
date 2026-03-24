@@ -161,6 +161,9 @@ output:
     transcripts: "./data/transcripts"
     signals: "./data/signals"
     checkpoints: "./data/checkpoints"
+    errors: "./data/errors"
+    metadata: "./data/metadata"
+    debug: "./data/debug"
     logs: "./logs"
 
 # ============================================================================

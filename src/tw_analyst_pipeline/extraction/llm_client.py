@@ -552,9 +552,8 @@ class GoogleExtractor(BaseLLMExtractor):
             # --- Log raw response to a debug file to answer user request ---
             try:
                 import json
-                debug_log_path = "logs/last_gemini_multimodal_response.json"
-                import os
-                os.makedirs("logs", exist_ok=True)
+                debug_log_path = self.settings.data_debug_dir / "last_gemini_multimodal_response.json"
+                debug_log_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(debug_log_path, "w", encoding="utf-8") as f:
                     # Attempt to dump the raw to_dict() if available, else str()
                     resp_dict = getattr(response, "to_dict", lambda: {"raw": str(response)})()

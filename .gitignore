@@ -150,6 +150,9 @@ data/raw/*.webm
 data/transcripts/*.json
 data/signals/*.json
 data/checkpoints/*.json
+data/errors/*.json
+data/metadata/*.json
+data/debug/*.json
 logs/*.log
 logs/*.gz
 logs/*.json
@@ -163,3 +166,6 @@ tmp/
 
 # Local Git hooks output/logs
 .githooks/*.log
+
+# Local private files
+local/cookies.txt

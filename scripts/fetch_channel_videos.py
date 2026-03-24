@@ -124,7 +124,7 @@ def main():
         print()
 
     # Save video list
-    output_file = Path("data") / "video_list.json"
+    output_file = settings.data_metadata_dir / "video_list.json"
     fetcher.save_video_list(videos, output_file)
     print(f"💾 Video list saved to: {output_file}\n")
 

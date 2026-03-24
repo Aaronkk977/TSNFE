@@ -104,6 +104,9 @@ class Settings(BaseSettings):
             Path(self.data_dir) / "signals",
             Path(self.data_dir) / "checkpoints",
             Path(self.data_dir) / "stock_codes",
+            Path(self.data_dir) / "errors",
+            Path(self.data_dir) / "metadata",
+            Path(self.data_dir) / "debug",
             Path(self.log_dir),
         ]
         for directory in directories:
@@ -128,6 +131,18 @@ class Settings(BaseSettings):
     @property
     def data_stock_codes_dir(self) -> Path:
         return Path(self.data_dir) / "stock_codes"
+
+    @property
+    def data_errors_dir(self) -> Path:
+        return Path(self.data_dir) / "errors"
+
+    @property
+    def data_metadata_dir(self) -> Path:
+        return Path(self.data_dir) / "metadata"
+
+    @property
+    def data_debug_dir(self) -> Path:
+        return Path(self.data_dir) / "debug"
 
     @property
     def logs_dir(self) -> Path:

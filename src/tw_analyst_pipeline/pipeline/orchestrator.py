@@ -288,7 +288,7 @@ class SignalPipeline(LoggerMixin):
 
         # Save to file
         try:
-            error_file = Path(self.settings.data_dir) / "failed_processing.json"
+            error_file = self.settings.data_errors_dir / "failed_processing.json"
             errors = []
 
             if error_file.exists():

@@ -274,6 +274,7 @@ class YouTubeFetcher(LoggerMixin):
     def save_video_list(self, videos: List[VideoInfo], output_file: Path):
         """Save video list to JSON file."""
         try:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "fetched_at": datetime.utcnow().isoformat(),
                 "count": len(videos),
