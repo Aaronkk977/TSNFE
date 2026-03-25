@@ -14,6 +14,7 @@
 - `YOUTUBE_API_KEY`
 - `GOOGLE_API_KEY`
 - `FUGLE_API_KEY`
+- `YT_COOKIES_TXT`（`local/cookies.txt` 內容，Netscape 格式）
 
 ## Analyst List
 
@@ -35,6 +36,14 @@ analysts:
 - `data/reports/daily_run_summary.json`
 
 Workflow 也會將上述檔案上傳為 artifact：`analyst-stock-table`。
+
+## YouTube 反機器人驗證
+
+Workflow 會先把 `YT_COOKIES_TXT` 寫入 `local/cookies.txt`，並執行：
+
+`python scripts/clean_yt_cookies.py --input local/cookies.txt --output local/cookies.txt`
+
+清理後只保留 YouTube 下載必要的 google/youtube 驗證 cookie。
 
 ## Run Mode Used in Workflow
 

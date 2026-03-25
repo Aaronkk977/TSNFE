@@ -136,6 +136,7 @@ TSNFE/
 - `YOUTUBE_API_KEY`
 - `GOOGLE_API_KEY`
 - `FUGLE_API_KEY`
+- `YT_COOKIES_TXT`（Netscape cookie 文字）
 
 ## 待實作功能
 - 分析產業說明影片，需學會如何根據產業和優勢條件推理適當標的

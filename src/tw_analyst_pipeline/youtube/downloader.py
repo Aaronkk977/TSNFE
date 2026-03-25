@@ -25,7 +25,7 @@ class AudioDownloader(LoggerMixin):
 
     def _get_ydl_opts(self) -> dict:
         """Get yt-dlp options for audio extraction."""
-        return {
+        opts = {
             # Format selection
             "format": "bestaudio/best",
             
@@ -59,6 +59,20 @@ class AudioDownloader(LoggerMixin):
             # Progress
             "progress_hooks": [self._progress_hook],
         }
+
+        configured_cookie = (self.settings.yt_cookies_file or "").strip()
+        cookie_candidates = []
+        if configured_cookie:
+            cookie_candidates.append(Path(configured_cookie))
+        cookie_candidates.append(Path("local") / "cookies.txt")
+
+        for cookie_path in cookie_candidates:
+            if cookie_path and cookie_path.exists() and cookie_path.is_file():
+                opts["cookiefile"] = str(cookie_path)
+                self.logger.info(f"Using yt-dlp cookies file: {cookie_path}")
+                break
+
+        return opts
 
     def _progress_hook(self, d):
         """Progress hook for yt-dlp."""

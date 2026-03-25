@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     # ========================================================================
     http_proxy: Optional[str] = None
     https_proxy: Optional[str] = None
+    yt_cookies_file: Optional[str] = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
