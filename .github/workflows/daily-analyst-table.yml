@@ -2,7 +2,7 @@ name: Daily Analyst Stock Table
 
 on:
   schedule:
-    - cron: '10 1 * * *'
+    - cron: '0 0 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -47,7 +47,7 @@ jobs:
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
+          # FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
           YT_COOKIES_FILE: local/cookies.txt
           LLM_PROVIDER: gemini
           LLM_MODEL: gemini-2.5-pro

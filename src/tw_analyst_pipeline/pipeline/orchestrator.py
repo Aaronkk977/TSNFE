@@ -5,6 +5,7 @@ End-to-end processing from YouTube URL to signal extraction
 
 import json
 import os
+import random
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -63,6 +64,7 @@ class SignalPipeline(LoggerMixin):
             except Exception as e:
                 self.logger.warning(f"YouTube metadata fetcher unavailable: {e}")
         self.error_log: List[ProcessingError] = []
+        self._has_requested_download = False
 
     def process_video(
         self,
@@ -139,6 +141,7 @@ class SignalPipeline(LoggerMixin):
                             raise RuntimeError(f"Skip download requested but file does not exist: {audio_path}")
                         self.logger.info(f"Using existing local audio: {audio_path}")
                     else:
+                        self._sleep_between_download_requests()
                         audio_path = self.downloader.download(video_url)
                         if not audio_path:
                             raise RuntimeError("Failed to download audio")
@@ -168,6 +171,7 @@ class SignalPipeline(LoggerMixin):
                                 raise RuntimeError(f"Skip download requested but file does not exist: {audio_path}")
                             self.logger.info(f"Using existing local audio: {audio_path}")
                         else:
+                            self._sleep_between_download_requests()
                             audio_path = self.downloader.download(video_url)
                             if not audio_path:
                                 raise RuntimeError("Failed to download audio")
@@ -261,6 +265,15 @@ class SignalPipeline(LoggerMixin):
                 results.append(None)
 
         return results
+
+    def _sleep_between_download_requests(self) -> None:
+        if self._has_requested_download:
+            delay_seconds = random.uniform(15, 45)
+            self.logger.info(
+                f"Sleeping {delay_seconds:.1f}s before next download request"
+            )
+            time.sleep(delay_seconds)
+        self._has_requested_download = True
 
     def _save_analysis(self, analysis: VideoAnalysis) -> Path:
         """Save analysis result to JSON file."""
