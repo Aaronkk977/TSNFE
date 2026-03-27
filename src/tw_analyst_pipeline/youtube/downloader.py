@@ -82,6 +82,12 @@ class AudioDownloader(LoggerMixin):
         elif d["status"] == "finished":
             self.logger.info(f"Download finished: {d.get('filename', 'unknown')}")
 
+    @staticmethod
+    def _is_format_unavailable_error(error: Exception) -> bool:
+        """Return True when yt-dlp reports an unavailable format selector."""
+        message = str(error).lower()
+        return "requested format is not available" in message
+
     @retry_with_backoff(max_attempts=3, exceptions=(Exception,))
     def download(self, video_url: str) -> Optional[Path]:
         """
@@ -109,11 +115,49 @@ class AudioDownloader(LoggerMixin):
         video_id = self._extract_video_id(video_url)
         self.logger.info(f"Downloading audio from video: {video_id}")
 
+        ydl_opts = self._get_ydl_opts()
+        format_fallbacks = [
+            "bestaudio/best",
+            "best",
+            "bv*+ba/b",
+        ]
+
+        # Keep order while removing duplicates if defaults already changed upstream.
+        deduped_fallbacks = []
+        for fmt in format_fallbacks:
+            if fmt not in deduped_fallbacks:
+                deduped_fallbacks.append(fmt)
+
         try:
-            # Download using yt-dlp
-            with yt_dlp.YoutubeDL(self._get_ydl_opts()) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                video_id = info.get("id")
+            # Download using yt-dlp with format fallback for videos with atypical stream manifests.
+            info = None
+            last_error = None
+
+            for index, format_selector in enumerate(deduped_fallbacks):
+                current_opts = {**ydl_opts, "format": format_selector}
+                try:
+                    with yt_dlp.YoutubeDL(current_opts) as ydl:
+                        info = ydl.extract_info(video_url, download=True)
+                        video_id = (info or {}).get("id", video_id)
+                    break
+                except Exception as e:
+                    last_error = e
+                    is_last_attempt = index == len(deduped_fallbacks) - 1
+                    if self._is_format_unavailable_error(e) and not is_last_attempt:
+                        next_format = deduped_fallbacks[index + 1]
+                        self.logger.warning(
+                            "Format '%s' unavailable for %s; retrying with '%s'",
+                            format_selector,
+                            video_id,
+                            next_format,
+                        )
+                        continue
+                    raise
+
+            if info is None:
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError(f"Failed to download {video_id}: unknown yt-dlp error")
 
             # Find the downloaded file
             audio_file = self._find_audio_file(video_id)
