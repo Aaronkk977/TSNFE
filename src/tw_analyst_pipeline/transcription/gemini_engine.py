@@ -103,20 +103,49 @@ class GeminiTranscriber(LoggerMixin):
 
         start_time = time.time()
         try:
-            api = YouTubeTranscriptApi()
-            transcript_items = api.fetch(
-                video_id,
-                languages=["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"],
-            )
+            languages = ["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"]
+            transcript_items = None
+            cookie_path = self._resolve_youtube_cookie_path()
+
+            if cookie_path:
+                # Prefer cookie-authenticated subtitle request in cloud environments.
+                try:
+                    transcript_items = YouTubeTranscriptApi.get_transcript(
+                        video_id,
+                        languages=languages,
+                        cookies=str(cookie_path),
+                    )
+                    self.logger.info(f"Fast-track using transcript cookies: {cookie_path}")
+                except TypeError:
+                    # Backward compatibility for youtube-transcript-api versions
+                    # that do not support cookies parameter in get_transcript.
+                    self.logger.warning(
+                        "youtube-transcript-api does not accept 'cookies' in get_transcript; "
+                        "fallback to fetch() without explicit cookies"
+                    )
+
+            if transcript_items is None:
+                api = YouTubeTranscriptApi()
+                transcript_items = api.fetch(
+                    video_id,
+                    languages=languages,
+                )
+
             segments = []
             text_chunks = []
 
             for i, item in enumerate(transcript_items):
-                seg_text = (getattr(item, "text", "") or "").strip()
+                if isinstance(item, dict):
+                    seg_text = (item.get("text", "") or "").strip()
+                    start_sec = float(item.get("start", 0.0) or 0.0)
+                    duration = float(item.get("duration", 0.0) or 0.0)
+                else:
+                    seg_text = (getattr(item, "text", "") or "").strip()
+                    start_sec = float(getattr(item, "start", 0.0) or 0.0)
+                    duration = float(getattr(item, "duration", 0.0) or 0.0)
+
                 if not seg_text:
                     continue
-                start_sec = float(getattr(item, "start", 0.0) or 0.0)
-                duration = float(getattr(item, "duration", 0.0) or 0.0)
                 segments.append(
                     {
                         "id": i,
@@ -150,6 +179,18 @@ class GeminiTranscriber(LoggerMixin):
         except Exception as e:
             self.logger.info(f"Fast-track transcript unavailable for {video_id}: {e}")
             return None
+
+    def _resolve_youtube_cookie_path(self) -> Optional[Path]:
+        configured_cookie = (self.settings.yt_cookies_file or "").strip()
+        cookie_candidates = []
+        if configured_cookie:
+            cookie_candidates.append(Path(configured_cookie))
+        cookie_candidates.append(Path("local") / "cookies.txt")
+
+        for cookie_path in cookie_candidates:
+            if cookie_path.exists() and cookie_path.is_file():
+                return cookie_path
+        return None
 
     def _save_transcript(self, result: TranscriptResult) -> Path:
         output_file = self.output_dir / f"{result.video_id}.json"
