@@ -4,9 +4,11 @@ Fetch videos from analyst channels
 """
 
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import unquote, urlparse
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -89,9 +91,26 @@ class YouTubeFetcher(LoggerMixin):
         Returns:
             Channel ID or None if not found
         """
-        # Remove @ if present
+        handle = handle.strip()
+        if not handle:
+            return None
+
+        if handle.startswith("http://") or handle.startswith("https://"):
+            parsed = urlparse(handle)
+            path_parts = [part for part in parsed.path.split("/") if part]
+            if path_parts:
+                if path_parts[0].startswith("@"):
+                    handle = unquote(path_parts[0][1:])
+                elif path_parts[0] == "channel" and len(path_parts) >= 2:
+                    return unquote(path_parts[1])
+                else:
+                    handle = unquote(path_parts[0])
+
         if handle.startswith("@"):
             handle = handle[1:]
+
+        if handle.startswith("UC") and len(handle) >= 20:
+            return handle
 
         try:
             # Search for the channel
@@ -122,6 +141,8 @@ class YouTubeFetcher(LoggerMixin):
         channel_id: str,
         max_results: int = 10,
         days_back: Optional[int] = 7,
+        exclude_shorts: bool = False,
+        min_duration_seconds: Optional[int] = None,
     ) -> List[VideoInfo]:
         """
         Get recent videos from a channel.
@@ -130,6 +151,8 @@ class YouTubeFetcher(LoggerMixin):
             channel_id: YouTube channel ID
             max_results: Maximum number of videos to fetch
             days_back: Only fetch videos from last N days (None = all)
+            exclude_shorts: Exclude videos that look like Shorts by duration (<= 60s)
+            min_duration_seconds: Exclude videos with duration <= this threshold
 
         Returns:
             List of VideoInfo objects
@@ -217,11 +240,66 @@ class YouTubeFetcher(LoggerMixin):
                         video.duration = detail.duration
                         video.view_count = detail.view_count
 
+            if exclude_shorts or min_duration_seconds is not None:
+                filtered_videos = []
+                filtered_count = 0
+
+                for video in videos:
+                    duration_seconds = self._parse_iso8601_duration_to_seconds(video.duration)
+                    if duration_seconds is None:
+                        filtered_videos.append(video)
+                        continue
+
+                    is_shorts = duration_seconds <= 60
+                    too_short = (
+                        min_duration_seconds is not None
+                        and duration_seconds <= min_duration_seconds
+                    )
+
+                    if (exclude_shorts and is_shorts) or too_short:
+                        filtered_count += 1
+                        continue
+
+                    filtered_videos.append(video)
+
+                if filtered_count > 0:
+                    self.logger.info(
+                        "Filtered %s short videos (exclude_shorts=%s, min_duration_seconds=%s)",
+                        filtered_count,
+                        exclude_shorts,
+                        min_duration_seconds,
+                    )
+                videos = filtered_videos
+
             return videos
 
         except HttpError as e:
             self.logger.error(f"HTTP error fetching videos: {e}")
             raise
+
+    @staticmethod
+    def _parse_iso8601_duration_to_seconds(duration: Optional[str]) -> Optional[int]:
+        if not duration:
+            return None
+
+        # Supports common YouTube formats like PT45S, PT12M30S, PT1H2M3S
+        match = re.fullmatch(
+            r"P(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?",
+            duration,
+        )
+        if not match:
+            return None
+
+        time_part = duration.split("T", 1)[1] if "T" in duration else ""
+
+        hours_match = re.search(r"(\d+)H", time_part)
+        minutes_match = re.search(r"(\d+)M", time_part)
+        seconds_match = re.search(r"(\d+)S", time_part)
+
+        hours = int(hours_match.group(1)) if hours_match else 0
+        minutes = int(minutes_match.group(1)) if minutes_match else 0
+        seconds = int(seconds_match.group(1)) if seconds_match else 0
+        return hours * 3600 + minutes * 60 + seconds
 
     def get_video_details(self, video_ids: List[str]) -> List[VideoInfo]:
         """

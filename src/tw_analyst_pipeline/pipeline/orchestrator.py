@@ -217,11 +217,11 @@ class SignalPipeline(LoggerMixin):
 
                 # Stage 6: Save results
                 self.logger.info("Stage 6: Saving results")
+                analysis.processing_duration_seconds = time.time() - pipeline_start
                 self._save_analysis(analysis)
 
                 # Total processing time
-                total_time = time.time() - pipeline_start
-                analysis.processing_duration_seconds = total_time
+                total_time = analysis.processing_duration_seconds
 
                 self.logger.info(
                     f"✓ Pipeline completed in {total_time:.1f}s "
@@ -285,9 +285,11 @@ class SignalPipeline(LoggerMixin):
                 data = {
                     "video_id": analysis.video_id,
                     "analyst_name": analysis.analyst_name,
-                    "signals": [sig.model_dump() for sig in analysis.signals],
-                    "market_outlook": analysis.market_outlook,
+                    "signals": [sig.model_dump(mode="json", exclude_none=True) for sig in analysis.signals],
                     "processed_at": analysis.processed_at.isoformat(),
+                }
+                optional_fields = {
+                    "market_outlook": analysis.market_outlook,
                     "processing_duration_seconds": analysis.processing_duration_seconds,
                     "transcript_length_chars": analysis.transcript_length_chars,
                     "confidence_score": analysis.confidence_score,
@@ -298,11 +300,12 @@ class SignalPipeline(LoggerMixin):
                     "video_view_count": analysis.video_view_count,
                     "video_published_at": analysis.video_published_at,
                     "recommendation_feature": (
-                        analysis.recommendation_feature.model_dump(mode="json")
+                        analysis.recommendation_feature.model_dump(mode="json", exclude_none=True)
                         if analysis.recommendation_feature
                         else None
                     ),
                 }
+                data.update({key: value for key, value in optional_fields.items() if value is not None})
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
             self._update_recommendation_list(analysis)
