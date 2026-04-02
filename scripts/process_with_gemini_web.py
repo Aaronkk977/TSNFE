@@ -8,6 +8,7 @@ Usage:
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Add src to path
@@ -78,12 +79,16 @@ def main() -> int:
         "--output",
         type=str,
         default=None,
-        help="Output JSON file path (default: data/signals/<video_id>_web.json)",
+        help="Output JSON file path (default: data/signals/daily/<YYYY-MM-DD>/<video_id>_web.json)",
     )
     args = parser.parse_args()
 
     video_id = extract_video_id(args.video_url)
-    output_path = Path(args.output) if args.output else Path("data/signals") / f"{video_id}_web.json"
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        date_tag = datetime.now().strftime("%Y-%m-%d")
+        output_path = Path("data/signals") / "daily" / date_tag / f"{video_id}_web.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     client = GeminiWebClient(

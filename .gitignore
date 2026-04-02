@@ -142,17 +142,20 @@ dmypy.json
 .DS_Store
 
 # Project specific
-data/raw/*.part
-data/raw/*.wav
-data/raw/*.mp3
-data/raw/*.m4a
-data/raw/*.webm
-data/transcripts/*.json
-data/signals/*.json
+data/raw/**/*.part
+data/raw/**/*.wav
+data/raw/**/*.mp3
+data/raw/**/*.m4a
+data/raw/**/*.webm
+data/transcripts/**/*.json
+data/signals/**/*.json
 data/checkpoints/*.json
 data/errors/*.json
 data/metadata/*.json
 data/debug/*.json
+data/reports/**/*.json
+data/reports/**/*.md
+data/reports/**/*.csv
 logs/*.log
 logs/*.gz
 logs/*.json

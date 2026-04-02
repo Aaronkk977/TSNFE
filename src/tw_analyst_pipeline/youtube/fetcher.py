@@ -151,7 +151,7 @@ class YouTubeFetcher(LoggerMixin):
             channel_id: YouTube channel ID
             max_results: Maximum number of videos to fetch
             days_back: Only fetch videos from last N days (None = all)
-            exclude_shorts: Exclude videos that look like Shorts by duration (<= 60s)
+            exclude_shorts: Exclude videos that look like Shorts by duration (<= 180s)
             min_duration_seconds: Exclude videos with duration <= this threshold
 
         Returns:
@@ -250,7 +250,7 @@ class YouTubeFetcher(LoggerMixin):
                         filtered_videos.append(video)
                         continue
 
-                    is_shorts = duration_seconds <= 60
+                    is_shorts = duration_seconds <= 180
                     too_short = (
                         min_duration_seconds is not None
                         and duration_seconds <= min_duration_seconds

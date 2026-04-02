@@ -23,8 +23,24 @@ class AudioDownloader(LoggerMixin):
         self.output_dir = Path(settings.data_raw_dir)
         self.failed_downloads_log = settings.data_errors_dir / "failed_downloads.json"
 
+    @staticmethod
+    def _current_date_folder() -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _dated_output_dir(self) -> Path:
+        return self.output_dir / "daily" / self._current_date_folder()
+
+    def _find_latest_audio_file(self, video_id: str) -> Optional[Path]:
+        candidates = sorted(
+            self.output_dir.glob(f"daily/*/{video_id}_*.wav"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+
     def _get_ydl_opts(self) -> dict:
         """Get yt-dlp options for audio extraction."""
+        output_dir = self._dated_output_dir()
         opts = {
             # Format selection
             "format": "bestaudio/best",
@@ -39,7 +55,7 @@ class AudioDownloader(LoggerMixin):
             ],
             
             # Output template
-            "outtmpl": str(self.output_dir / "%(id)s.%(ext)s"),
+            "outtmpl": str(output_dir / "%(id)s_%(epoch)s.%(ext)s"),
             
             # Audio-specific options
             "keepvideo": False,  # Don't keep video file
@@ -189,11 +205,7 @@ class AudioDownloader(LoggerMixin):
 
     def _find_audio_file(self, video_id: str) -> Optional[Path]:
         """Find the downloaded audio file."""
-        for ext in ["wav", "mp3", "m4a", "opus", "webm"]:
-            file_path = self.output_dir / f"{video_id}.{ext}"
-            if file_path.exists():
-                return file_path
-        return None
+        return self._find_latest_audio_file(video_id)
 
     def _log_failed_download(self, video_url: str, error: str):
         """Log failed download to file."""

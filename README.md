@@ -9,6 +9,7 @@
 - 使用 Gemini 可支援文字、音檔和連結多種消息來源
 - 股票代碼驗證（Fugle / local）
 - 產出單檔訊號 + recommendation 清單
+- raw / transcripts / signals / reports 皆以 `daily/YYYY-MM-DD/` 分流保存
 - 支援檢查點、快取、錯誤記錄
 
 ## 快速開始
@@ -35,10 +36,10 @@ python scripts/process_video.py "https://www.youtube.com/watch?v=VIDEO_ID"
 
 ### 核心資料輸出
 
-- `data/signals/{video_id}.json`：單支影片訊號
+- `data/signals/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.json`：單支影片訊號
 - `data/signals/recommendation_list.json`：彙總推薦清單
-- `data/transcripts/{video_id}.json`：逐字稿（transcript 流程時）
-- `data/raw/{video_id}.wav`：下載音訊（中介檔）
+- `data/transcripts/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.json`：逐字稿（transcript 流程時）
+- `data/raw/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.wav`：下載音訊（中介檔）
 
 ### 系統性輸出（集中到 data 子目錄）
 
@@ -84,6 +85,7 @@ TSNFE/
 - `python scripts/fetch_channel_videos.py @channel --max-videos 5`：抓頻道影片清單
 - `python scripts/process_with_gemini_web.py <url>`：走 Gemini Web/CDP 流程
 - `python scripts/daily_analyst_table.py`：產生「分析師 × 股票」日報表
+- `python scripts/build_table_from_signals.py --days-back 1`：只用現有 signal JSON 重新生表
 - `pytest`：跑測試
 
 ## 設定檔
@@ -126,9 +128,9 @@ TSNFE/
 
 本 repo 已內建 workflow：`.github/workflows/daily-analyst-table.yml`，每天會自動產出：
 
-- `data/reports/analyst_stock_matrix.md`
-- `data/reports/analyst_stock_matrix.csv`
-- `data/reports/daily_run_summary.json`
+- `data/reports/daily/YYYY-MM-DD/analyst_stock_matrix_YYYYMMDD_HHMMSS.md`
+- `data/reports/daily/YYYY-MM-DD/analyst_stock_matrix_YYYYMMDD_HHMMSS.csv`
+- `data/reports/daily/YYYY-MM-DD/daily_run_summary_YYYYMMDD_HHMMSS.json`
 
 分析師清單在 `config/analysts.yaml`。
 

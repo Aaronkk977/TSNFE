@@ -136,9 +136,9 @@ class SignalPipeline(LoggerMixin):
                     self.logger.info("Stage 1: Handling audio for end-to-end multimodal extraction")
                     
                     if skip_download:
-                        audio_path = os.path.join(self.settings.data_raw_dir, f"{video_id}.wav")
-                        if not os.path.exists(audio_path):
-                            raise RuntimeError(f"Skip download requested but file does not exist: {audio_path}")
+                        audio_path = self.downloader._find_latest_audio_file(video_id)
+                        if audio_path is None:
+                            raise RuntimeError(f"Skip download requested but file does not exist for video: {video_id}")
                         self.logger.info(f"Using existing local audio: {audio_path}")
                     else:
                         self._sleep_between_download_requests()
@@ -166,9 +166,9 @@ class SignalPipeline(LoggerMixin):
                         self.logger.info("Stage 2: Handling audio")
                         
                         if skip_download:
-                            audio_path = os.path.join(self.settings.data_raw_dir, f"{video_id}.wav")
-                            if not os.path.exists(audio_path):
-                                raise RuntimeError(f"Skip download requested but file does not exist: {audio_path}")
+                            audio_path = self.downloader._find_latest_audio_file(video_id)
+                            if audio_path is None:
+                                raise RuntimeError(f"Skip download requested but file does not exist for video: {video_id}")
                             self.logger.info(f"Using existing local audio: {audio_path}")
                         else:
                             self._sleep_between_download_requests()
@@ -277,35 +277,37 @@ class SignalPipeline(LoggerMixin):
 
     def _save_analysis(self, analysis: VideoAnalysis) -> Path:
         """Save analysis result to JSON file."""
-        output_file = self.settings.data_signals_dir / f"{analysis.video_id}.json"
+        output_dir = self.settings.data_signals_dir / "daily" / analysis.processed_at.strftime("%Y-%m-%d")
+        output_file = output_dir / f"{analysis.video_id}_{analysis.processed_at.strftime('%Y%m%d_%H%M%S')}.json"
 
         try:
+            data = {
+                "video_id": analysis.video_id,
+                "analyst_name": analysis.analyst_name,
+                "signals": [sig.model_dump(mode="json", exclude_none=True) for sig in analysis.signals],
+                "processed_at": analysis.processed_at.isoformat(),
+            }
+            optional_fields = {
+                "market_outlook": analysis.market_outlook,
+                "processing_duration_seconds": analysis.processing_duration_seconds,
+                "transcript_length_chars": analysis.transcript_length_chars,
+                "confidence_score": analysis.confidence_score,
+                "sentiment_score": analysis.sentiment_score,
+                "urgency": analysis.urgency,
+                "implied_label": analysis.implied_label,
+                "normalized_label": analysis.normalized_label,
+                "video_view_count": analysis.video_view_count,
+                "video_published_at": analysis.video_published_at,
+                "recommendation_feature": (
+                    analysis.recommendation_feature.model_dump(mode="json", exclude_none=True)
+                    if analysis.recommendation_feature
+                    else None
+                ),
+            }
+            data.update({key: value for key, value in optional_fields.items() if value is not None})
+
+            output_dir.mkdir(parents=True, exist_ok=True)
             with open(output_file, "w", encoding="utf-8") as f:
-                # Convert to dict for JSON serialization
-                data = {
-                    "video_id": analysis.video_id,
-                    "analyst_name": analysis.analyst_name,
-                    "signals": [sig.model_dump(mode="json", exclude_none=True) for sig in analysis.signals],
-                    "processed_at": analysis.processed_at.isoformat(),
-                }
-                optional_fields = {
-                    "market_outlook": analysis.market_outlook,
-                    "processing_duration_seconds": analysis.processing_duration_seconds,
-                    "transcript_length_chars": analysis.transcript_length_chars,
-                    "confidence_score": analysis.confidence_score,
-                    "sentiment_score": analysis.sentiment_score,
-                    "urgency": analysis.urgency,
-                    "implied_label": analysis.implied_label,
-                    "normalized_label": analysis.normalized_label,
-                    "video_view_count": analysis.video_view_count,
-                    "video_published_at": analysis.video_published_at,
-                    "recommendation_feature": (
-                        analysis.recommendation_feature.model_dump(mode="json", exclude_none=True)
-                        if analysis.recommendation_feature
-                        else None
-                    ),
-                }
-                data.update({key: value for key, value in optional_fields.items() if value is not None})
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
             self._update_recommendation_list(analysis)

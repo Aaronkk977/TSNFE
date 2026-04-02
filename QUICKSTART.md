@@ -45,9 +45,9 @@ python scripts/process_video.py "VIDEO_ID" --mode text --text-source auto
 
 ## 5. 主要輸出位置
 
-- `data/signals/{video_id}.json`
+- `data/signals/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.json`
 - `data/signals/recommendation_list.json`
-- `data/transcripts/{video_id}.json`（若走 transcript 流程）
+- `data/transcripts/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.json`（若走 transcript 流程）
 - `data/errors/failed_processing.json`
 - `data/errors/failed_downloads.json`
 
@@ -77,8 +77,9 @@ python scripts/process_with_gemini_web.py "https://www.youtube.com/watch?v=VIDEO
 
 ```bash
 python scripts/daily_analyst_table.py --mode text --text-source auto --days-back 2 --max-videos 1
+python scripts/build_table_from_signals.py --days-back 1
 ```
 
 輸出：
-- `data/reports/analyst_stock_matrix.md`
-- `data/reports/analyst_stock_matrix.csv`
+- `data/reports/daily/YYYY-MM-DD/analyst_stock_matrix_YYYYMMDD_HHMMSS.md`
+- `data/reports/daily/YYYY-MM-DD/analyst_stock_matrix_YYYYMMDD_HHMMSS.csv`

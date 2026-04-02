@@ -5,6 +5,7 @@ Uses Playwright to run a real browser session and capture media stream URLs.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -21,6 +22,13 @@ class BrowserMediaIngestor(LoggerMixin):
     def __init__(self, settings: Settings):
         self.settings = settings
         self.output_dir = Path(settings.data_raw_dir)
+
+    @staticmethod
+    def _current_date_folder() -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _dated_output_dir(self) -> Path:
+        return self.output_dir / "daily" / self._current_date_folder()
 
     def capture(self, video_url: str, video_id: str) -> Path:
         media_urls = self._collect_media_urls(video_url)
@@ -92,7 +100,9 @@ class BrowserMediaIngestor(LoggerMixin):
 
     def _download_stream(self, url: str, video_id: str) -> Path:
         extension = "m4a" if "mime=audio" in url else "mp4"
-        output = self.output_dir / f"{video_id}.{extension}"
+        output_dir = self._dated_output_dir()
+        output = output_dir / f"{video_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.{extension}"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         with requests.get(url, stream=True, timeout=120) as response:
             response.raise_for_status()

@@ -23,6 +23,21 @@ class WhisperTranscriber(LoggerMixin):
         self.output_dir = Path(settings.data_transcripts_dir)
         self.model = self._load_model()
 
+    @staticmethod
+    def _current_date_folder() -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _dated_output_dir(self) -> Path:
+        return self.output_dir / "daily" / self._current_date_folder()
+
+    def _find_latest_transcript_file(self, video_id: str) -> Optional[Path]:
+        candidates = sorted(
+            self.output_dir.glob(f"daily/*/{video_id}_*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+
     def _load_model(self) -> WhisperModel:
         """Load Whisper model with specified configuration."""
         self.logger.info(f"Loading Whisper model: {self.settings.whisper_model}")
@@ -125,9 +140,11 @@ class WhisperTranscriber(LoggerMixin):
 
     def _save_transcript(self, result: TranscriptResult) -> Path:
         """Save transcript to JSON file."""
-        output_file = self.output_dir / f"{result.video_id}.json"
+        output_dir = self._dated_output_dir()
+        output_file = output_dir / f"{result.video_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
 
         try:
+            output_dir.mkdir(parents=True, exist_ok=True)
             with open(output_file, "w", encoding="utf-8") as f:
                 # Convert to dict for JSON serialization
                 data = {
@@ -150,9 +167,9 @@ class WhisperTranscriber(LoggerMixin):
 
     def load_transcript(self, video_id: str) -> Optional[TranscriptResult]:
         """Load cached transcript from file."""
-        cache_file = self.output_dir / f"{video_id}.json"
+        cache_file = self._find_latest_transcript_file(video_id)
 
-        if not cache_file.exists():
+        if cache_file is None:
             return None
 
         try:
@@ -167,4 +184,4 @@ class WhisperTranscriber(LoggerMixin):
 
     def is_transcribed(self, video_id: str) -> bool:
         """Check if video has been transcribed."""
-        return (self.output_dir / f"{video_id}.json").exists()
+        return self._find_latest_transcript_file(video_id) is not None

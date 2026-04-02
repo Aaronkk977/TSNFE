@@ -1,7 +1,7 @@
 import json
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -48,13 +48,29 @@ def fetch_video_title(video_id):
     return None
 
 
+def _find_latest_daily_summary() -> Path:
+    summary_files = sorted(
+        Path("data/reports/daily").glob("*/daily_run_summary_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not summary_files:
+        raise FileNotFoundError("No daily summary file found under data/reports/daily")
+    return summary_files[0]
+
+
 def load_signal_fallback(video_id):
     if not video_id:
         return {}
 
-    signal_path = Path("data/signals") / f"{video_id}.json"
-    if not signal_path.exists():
+    signal_candidates = sorted(
+        Path("data/signals/daily").glob(f"*/{video_id}_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not signal_candidates:
         return {}
+    signal_path = signal_candidates[0]
 
     try:
         with open(signal_path, "r", encoding="utf-8") as f:
@@ -110,88 +126,76 @@ def send_to_discord(message):
         raise RuntimeError(f"Discord request failed with status {response.status_code}")
 
 def main():
-    # 指向 daily_analyst_table.py 產出的摘要檔
-    summary_path = Path("data/reports/daily_run_summary.json")
+    summary_path = _find_latest_daily_summary()
     debug_print(f"CWD: {Path.cwd()}")
     debug_print(f"Summary path: {summary_path.resolve()}")
     debug_print(f"Summary exists: {summary_path.exists()}")
-    
-    if not summary_path.exists():
-        msg = "⚠️ 每日排程執行失敗：找不到摘要檔案。"
-    else:
-        with open(summary_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
 
-        completed_at_raw = data.get("completed_at")
-        completed_dt = parse_datetime(completed_at_raw)
-        if completed_dt is None:
-            completed_dt = datetime.fromtimestamp(summary_path.stat().st_mtime)
+    with open(summary_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-        window_end_raw = data.get("window_end")
-        window_start_raw = data.get("window_start")
-        window_end_dt = parse_datetime(window_end_raw) or completed_dt
-        window_start_dt = parse_datetime(window_start_raw) or (window_end_dt - timedelta(days=1))
+    completed_dt = parse_datetime(data.get("completed_at"))
+    window_start_dt = parse_datetime(data.get("window_start"))
+    window_end_dt = parse_datetime(data.get("window_end"))
 
-        tracking_list_count = data.get("tracking_list_count")
-        updated_video_total = data.get("updated_video_total")
-        processed_video_total = data.get("processed_video_total")
-        completed_at = format_datetime(completed_dt.isoformat())
-        window_start = format_datetime(window_start_dt.isoformat())
-        window_end = format_datetime(window_end_dt.isoformat())
+    if completed_dt is None or window_start_dt is None or window_end_dt is None:
+        raise ValueError("Invalid summary format: missing completed/window timestamps")
 
-        count = data.get("count", 0)
-        items = data.get("items", [])
-        debug_print(f"Summary count: {count}")
-        debug_print(f"Summary items: {len(items)}")
+    tracking_list_count = data.get("tracking_list_count")
+    updated_video_total = data.get("updated_video_total")
+    processed_video_total = data.get("processed_video_total")
+    items = data.get("items", [])
 
-        if tracking_list_count is None:
-            tracking_list_count = len({item.get("analyst") for item in items if item.get("analyst")})
-        if updated_video_total is None:
-            updated_video_total = len(items)
-        if processed_video_total is None:
-            processed_video_total = len(items)
-        
-        msg = "每日分析師影片處理摘要\n"
-        msg += f"0) 完成時間: {completed_at}\n"
-        msg += (
-            f"1) 追蹤名單: {tracking_list_count if tracking_list_count is not None else 'N/A'} 位, "
-            f"24小時更新總影片數: {updated_video_total if updated_video_total is not None else len(items)} 部 "
-            f"(範圍: {window_start} ~ {window_end})\n"
-        )
-        msg = "\n"
+    if tracking_list_count is None or updated_video_total is None or processed_video_total is None:
+        raise ValueError("Invalid summary format: missing required counters")
 
-        msg += f"2) 總處理影片數: {processed_video_total if processed_video_total is not None else len(items)}\n\n"
-        msg = "\n"
-        
-        msg += "3) 逐支影片摘要\n"
-        
-        for idx, item in enumerate(items, start=1):
-            status_icon = "OK" if item.get('status') == 'ok' else "FAIL"
-            analyst = item.get('analyst', 'Unknown')
-            status = item.get('status', 'unknown')
-            video_id = item.get('video_id')
-            video_title = item.get('video_title')
-            video_url = (
-                f"https://youtube.com/watch?v={video_id}"
-                if video_id
-                else "N/A"
-            )
+    debug_print(f"Summary items: {len(items)}")
 
-            fallback = load_signal_fallback(video_id)
-            if not video_title and video_id:
-                video_title = fetch_video_title(video_id)
+    msg = "每日分析師影片處理摘要\n"
+    msg += f"0) 完成時間: {format_datetime(completed_dt.isoformat())}\n"
+    msg += (
+        f"1) 追蹤名單: {tracking_list_count} 位, "
+        f"24小時更新總影片數: {updated_video_total} 部 "
+        f"(範圍: {format_datetime(window_start_dt.isoformat())} ~ {format_datetime(window_end_dt.isoformat())})\n"
+    )
+    msg += f"2) 總處理影片數: {processed_video_total}\n\n"
+    msg += "3) 逐支影片摘要\n"
 
-            view_count = item.get('video_view_count', fallback.get("video_view_count", 'N/A'))
-            recommended_count = item.get('recommended_count', fallback.get("recommended_count", 0))
-            not_recommended_count = item.get('not_recommended_count', fallback.get("not_recommended_count", 0))
+    display_items = items[:10]
+    for idx, item in enumerate(display_items, start=1):
+        status_icon = "OK" if item.get("status") == "ok" else "FAIL"
+        analyst = item.get("analyst", "Unknown")
+        status = item.get("status", "unknown")
+        video_id = item.get("video_id")
+        video_title = item.get("video_title")
+        video_url = f"https://youtube.com/watch?v={video_id}" if video_id else "N/A"
 
-            msg += f"{idx}. [{status_icon}] {analyst} ({status})\n"
-            msg += f"   標題: {video_title or 'N/A'}\n"
-            msg += f"   網址: {video_url}\n"
-            msg += f"   觀看數: {view_count}\n"
-            msg += f"   推薦數: {recommended_count}, 不推薦數: {not_recommended_count}\n"
-            if item.get('error'):
-                msg += f"   錯誤: {item['error']}\n"
+        fallback = load_signal_fallback(video_id)
+        if not video_title and video_id:
+            video_title = fetch_video_title(video_id)
+
+        view_count = item.get("video_view_count")
+        if view_count is None:
+            view_count = fallback.get("video_view_count", "N/A")
+
+        recommended_count = item.get("recommended_count")
+        if recommended_count is None:
+            recommended_count = fallback.get("recommended_count", 0)
+
+        not_recommended_count = item.get("not_recommended_count")
+        if not_recommended_count is None:
+            not_recommended_count = fallback.get("not_recommended_count", 0)
+
+        msg += f"{idx}. [{status_icon}] {analyst} ({status})\n"
+        msg += f"   標題: {video_title or 'N/A'}\n"
+        msg += f"   網址: {video_url}\n"
+        msg += f"   觀看數: {view_count}\n"
+        msg += f"   推薦數: {recommended_count}, 不推薦數: {not_recommended_count}\n"
+        if item.get("error"):
+            msg += f"   錯誤: {item['error']}\n"
+
+    if len(items) > 10:
+        msg += f"\n... 後面還有 {len(items) - 10} 部影片，但因長度而截斷。\n"
 
     debug_print(f"Message preview: {msg[:500]}")
 

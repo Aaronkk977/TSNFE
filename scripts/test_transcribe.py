@@ -27,11 +27,11 @@ def main():
     transcriber = WhisperTranscriber(settings)
 
     # Check for downloaded audio files
-    audio_dir = Path("data/raw")
-    audio_files = list(audio_dir.glob("*.wav"))
+    audio_dir = Path("data/raw/daily")
+    audio_files = sorted(audio_dir.glob("*/*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
 
     if not audio_files:
-        print("✗ No audio files found in data/raw/")
+        print("✗ No audio files found in data/raw/daily/")
         print("Please download a video first using:")
         print("  python scripts/fetch_channel_videos.py @win16888 --download\n")
         return 1
@@ -68,8 +68,10 @@ def main():
         print(f"{'='*70}\n")
         print(transcript.text[:500])
         print("\n...")
+        transcript_candidates = sorted(Path("data/transcripts/daily").glob(f"*/*{video_id}*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        transcript_path = transcript_candidates[0] if transcript_candidates else None
         print(f"\n{'='*70}")
-        print(f"✓ Full transcript saved to: data/transcripts/{video_id}.json")
+        print(f"✓ Full transcript saved to: {transcript_path if transcript_path else 'data/transcripts/daily/YYYY-MM-DD/...'}")
         print(f"{'='*70}\n")
         return 0
     else:

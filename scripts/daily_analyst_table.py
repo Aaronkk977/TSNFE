@@ -186,7 +186,7 @@ def _count_signal_labels(analysis: VideoAnalysis) -> Tuple[int, int, int]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate daily analyst x stock matrix")
     parser.add_argument("--analysts-file", default="config/analysts.yaml")
-    parser.add_argument("--max-videos", type=int, default=50)
+    parser.add_argument("--max-videos", type=int, default=20)
     parser.add_argument("--days-back", type=int, default=2)
     parser.add_argument("--exclude-shorts", action="store_true", default=True)
     parser.add_argument("--include-shorts", dest="exclude_shorts", action="store_false")
@@ -318,16 +318,10 @@ def main() -> int:
     date_folder = settings.data_reports_dir / "daily" / completed_at_dt.strftime("%Y-%m-%d")
     timestamp_tag = completed_at_dt.strftime("%Y%m%d_%H%M%S")
 
-    md_file = settings.data_reports_dir / "analyst_stock_matrix.md"
-    csv_file = settings.data_reports_dir / "analyst_stock_matrix.csv"
-    summary_file = settings.data_reports_dir / "daily_run_summary.json"
-
     dated_md_file = date_folder / f"analyst_stock_matrix_{timestamp_tag}.md"
     dated_csv_file = date_folder / f"analyst_stock_matrix_{timestamp_tag}.csv"
     dated_summary_file = date_folder / f"daily_run_summary_{timestamp_tag}.json"
 
-    _write_markdown_table(md_file, ordered_stocks, matrix, stock_display)
-    _write_csv_table(csv_file, ordered_stocks, matrix, stock_display)
     _write_markdown_table(dated_md_file, ordered_stocks, matrix, stock_display)
     _write_csv_table(dated_csv_file, ordered_stocks, matrix, stock_display)
     summary_payload = {
@@ -348,12 +342,8 @@ def main() -> int:
         "items": run_rows,
     }
 
-    _write_run_summary(summary_file, summary_payload)
     _write_run_summary(dated_summary_file, summary_payload)
 
-    print(f"[INFO] Markdown table: {md_file}")
-    print(f"[INFO] CSV table: {csv_file}")
-    print(f"[INFO] Summary: {summary_file}")
     print(f"[INFO] Dated markdown: {dated_md_file}")
     print(f"[INFO] Dated csv: {dated_csv_file}")
     print(f"[INFO] Dated summary: {dated_summary_file}")
@@ -364,7 +354,7 @@ def main() -> int:
         summary_path = os.getenv("GITHUB_STEP_SUMMARY", "").strip()
         if summary_path:
             github_summary = Path(summary_path)
-            with open(md_file, "r", encoding="utf-8") as f:
+            with open(dated_md_file, "r", encoding="utf-8") as f:
                 table_md = f.read()
             with open(github_summary, "a", encoding="utf-8") as f:
                 f.write("## Daily Analyst x Stock Table\n\n")
