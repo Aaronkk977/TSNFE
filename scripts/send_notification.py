@@ -93,6 +93,15 @@ def load_signal_fallback(video_id):
         "not_recommended_count": not_recommended_count,
     }
 
+
+def to_int_or_default(value, default=0):
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
 def send_to_telegram(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -161,7 +170,26 @@ def main():
     msg += f"2) 總處理影片數: {processed_video_total}\n\n"
     msg += "3) 逐支影片摘要\n"
 
-    display_items = items[:10]
+    fallback_cache = {}
+
+    def get_fallback(video_id):
+        if not video_id:
+            return {}
+        if video_id not in fallback_cache:
+            fallback_cache[video_id] = load_signal_fallback(video_id)
+        return fallback_cache[video_id]
+
+    def get_view_count(item):
+        direct = item.get("video_view_count")
+        if direct is not None:
+            return to_int_or_default(direct, 0)
+        fallback = get_fallback(item.get("video_id"))
+        return to_int_or_default(fallback.get("video_view_count"), 0)
+
+    video_items = [item for item in items if item.get("video_id")]
+    sorted_items = sorted(video_items, key=get_view_count, reverse=True)
+
+    display_items = sorted_items[:10]
     for idx, item in enumerate(display_items, start=1):
         status_icon = "OK" if item.get("status") == "ok" else "FAIL"
         analyst = item.get("analyst", "Unknown")
@@ -170,7 +198,7 @@ def main():
         video_title = item.get("video_title")
         video_url = f"https://youtube.com/watch?v={video_id}" if video_id else "N/A"
 
-        fallback = load_signal_fallback(video_id)
+        fallback = get_fallback(video_id)
         if not video_title and video_id:
             video_title = fetch_video_title(video_id)
 
@@ -194,8 +222,8 @@ def main():
         if item.get("error"):
             msg += f"   錯誤: {item['error']}\n"
 
-    if len(items) > 10:
-        msg += f"\n... 後面還有 {len(items) - 10} 部影片，但因長度而截斷。\n"
+    if len(video_items) > 10:
+        msg += f"\n... 後面還有 {max(0, len(video_items) - 10)} 部影片，但因長度而截斷。\n"
 
     debug_print(f"Message preview: {msg[:500]}")
 

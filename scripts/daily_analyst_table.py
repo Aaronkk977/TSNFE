@@ -7,6 +7,7 @@ Daily automation script:
 """
 
 import argparse
+from collections import defaultdict
 import csv
 import json
 import random
@@ -122,6 +123,7 @@ def _write_markdown_table(
     ordered_stocks: List[str],
     matrix: Dict[str, Dict[str, str]],
     stock_display: Dict[str, str],
+    stock_rankings: dict,
 ):
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -135,6 +137,30 @@ def _write_markdown_table(
         for code in ordered_stocks:
             row.append(matrix[analyst].get(code, ""))
         lines.append("| " + " | ".join(row) + " |")
+
+    lines.append("")
+    lines.append("## 股票重點清單")
+
+    section_specs = [
+        ("最多分析師推薦的股票", "most_recommended_by_analysts", "analyst_count", "位分析師"),
+        ("最多分析師不推薦的股票", "most_not_recommended_by_analysts", "analyst_count", "位分析師"),
+        ("觀看數最多的推薦股票", "most_viewed_recommended_stocks", "view_sum", "累計觀看"),
+        ("觀看數最多的不推薦股票", "most_viewed_not_recommended_stocks", "view_sum", "累計觀看"),
+    ]
+
+    for title, key, metric_key, metric_suffix in section_specs:
+        lines.append("")
+        lines.append(f"### {title}")
+        ranking_items = stock_rankings.get(key, [])
+        if not ranking_items:
+            lines.append("- 無")
+            continue
+
+        for idx, item in enumerate(ranking_items, start=1):
+            code = item.get("stock_code", "")
+            name = item.get("stock_name", code)
+            metric = item.get(metric_key, 0)
+            lines.append(f"{idx}. {code} {name} - {metric} {metric_suffix}")
 
     with open(output_file, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -183,10 +209,86 @@ def _count_signal_labels(analysis: VideoAnalysis) -> Tuple[int, int, int]:
     return recommended, not_recommended, neutral
 
 
+def _build_stock_rankings(analyses: List[VideoAnalysis], limit: int = 10) -> dict:
+    analyst_recommended = defaultdict(set)
+    analyst_not_recommended = defaultdict(set)
+    viewed_recommended = defaultdict(int)
+    viewed_not_recommended = defaultdict(int)
+    stock_names: Dict[str, str] = {}
+
+    for analysis in analyses:
+        analyst = analysis.analyst_name or "Unknown"
+        view_count = analysis.video_view_count or 0
+        seen_pairs = set()
+
+        for signal in analysis.signals:
+            code = signal.stock_code
+            stock_names[code] = signal.stock_name or code
+            label = normalize_label(signal.normalized_label or signal.implied_label)
+
+            if label == "買進":
+                analyst_recommended[code].add(analyst)
+            elif label == "賣出":
+                analyst_not_recommended[code].add(analyst)
+            else:
+                continue
+
+            dedupe_key = (analysis.video_id, code, label)
+            if dedupe_key in seen_pairs:
+                continue
+            seen_pairs.add(dedupe_key)
+
+            if label == "買進":
+                viewed_recommended[code] += view_count
+            else:
+                viewed_not_recommended[code] += view_count
+
+    def _top_by_analyst(source: dict) -> List[dict]:
+        ordered = sorted(
+            source.items(),
+            key=lambda kv: (-len(kv[1]), kv[0]),
+        )
+        return [
+            {
+                "stock_code": code,
+                "stock_name": stock_names.get(code, code),
+                "analyst_count": len(analyst_set),
+            }
+            for code, analyst_set in ordered[:limit]
+        ]
+
+    def _top_by_view(source: dict) -> List[dict]:
+        ordered = sorted(
+            source.items(),
+            key=lambda kv: (-kv[1], kv[0]),
+        )
+        return [
+            {
+                "stock_code": code,
+                "stock_name": stock_names.get(code, code),
+                "view_sum": int(view_sum),
+            }
+            for code, view_sum in ordered[:limit]
+        ]
+
+    return {
+        "most_recommended_by_analysts": _top_by_analyst(analyst_recommended),
+        "most_not_recommended_by_analysts": _top_by_analyst(analyst_not_recommended),
+        "most_viewed_recommended_stocks": _top_by_view(viewed_recommended),
+        "most_viewed_not_recommended_stocks": _top_by_view(viewed_not_recommended),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate daily analyst x stock matrix")
     parser.add_argument("--analysts-file", default="config/analysts.yaml")
     parser.add_argument("--max-videos", type=int, default=20)
+    parser.add_argument(
+        "--max-videos-per-analyst",
+        type=int,
+        default=50,
+        help="Max candidate videos fetched per analyst before applying global --max-videos cap",
+    )
     parser.add_argument("--days-back", type=int, default=2)
     parser.add_argument("--exclude-shorts", action="store_true", default=True)
     parser.add_argument("--include-shorts", dest="exclude_shorts", action="store_false")
@@ -216,12 +318,16 @@ def main() -> int:
     analyses: List[VideoAnalysis] = []
     run_rows = []
     processed_videos = 0
+    processed_video_total = 0
     updated_video_total = 0
     tz_taipei = timezone(timedelta(hours=8))
     window_end_dt = datetime.now(tz_taipei)
     window_start_dt = window_end_dt - timedelta(days=args.days_back)
 
     for item in analysts:
+        if processed_video_total >= max(1, args.max_videos):
+            break
+
         analyst_name = item["name"]
         channel = item["channel"]
         print(f"[INFO] Analyst={analyst_name}, channel={channel}")
@@ -234,7 +340,7 @@ def main() -> int:
 
             videos = fetcher.get_channel_videos(
                 channel_id=channel_id,
-                max_results=max(1, args.max_videos),
+                max_results=max(1, args.max_videos_per_analyst),
                 days_back=args.days_back,
                 exclude_shorts=args.exclude_shorts,
                 min_duration_seconds=args.min_duration_seconds,
@@ -251,9 +357,13 @@ def main() -> int:
             updated_video_total += len(videos)
 
             for video_index, selected_video in enumerate(videos, start=1):
+                if processed_video_total >= max(1, args.max_videos):
+                    break
+
                 _sleep_before_next_video(processed_videos)
                 video_url = f"https://youtube.com/watch?v={selected_video.video_id}"
                 processed_videos += 1
+                processed_video_total += 1
 
                 try:
                     analysis = pipeline.process_video(
@@ -313,6 +423,7 @@ def main() -> int:
             run_rows.append({"analyst": analyst_name, "status": "error", "error": str(e)})
 
     ordered_stocks, matrix, stock_display = _collect_matrix(analyses)
+    stock_rankings = _build_stock_rankings(analyses)
 
     completed_at_dt = datetime.now(tz_taipei)
     date_folder = settings.data_reports_dir / "daily" / completed_at_dt.strftime("%Y-%m-%d")
@@ -322,7 +433,7 @@ def main() -> int:
     dated_csv_file = date_folder / f"analyst_stock_matrix_{timestamp_tag}.csv"
     dated_summary_file = date_folder / f"daily_run_summary_{timestamp_tag}.json"
 
-    _write_markdown_table(dated_md_file, ordered_stocks, matrix, stock_display)
+    _write_markdown_table(dated_md_file, ordered_stocks, matrix, stock_display, stock_rankings)
     _write_csv_table(dated_csv_file, ordered_stocks, matrix, stock_display)
     summary_payload = {
         "completed_at": completed_at_dt.isoformat(timespec="seconds"),
@@ -330,10 +441,13 @@ def main() -> int:
         "window_end": window_end_dt.isoformat(timespec="minutes"),
         "tracking_list_count": len(analysts),
         "updated_video_total": updated_video_total,
-        "processed_video_total": len(run_rows),
-        "count": len(run_rows),
+        "processed_video_total": processed_video_total,
+        "count": processed_video_total,
+        "max_videos": args.max_videos,
+        "max_videos_per_analyst": args.max_videos_per_analyst,
         "date_folder": str(date_folder),
         "timestamp_tag": timestamp_tag,
+        "stock_rankings": stock_rankings,
         "dated_files": {
             "markdown": str(dated_md_file),
             "csv": str(dated_csv_file),
