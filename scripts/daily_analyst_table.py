@@ -290,6 +290,8 @@ def main() -> int:
         help="Max candidate videos fetched per analyst before applying global --max-videos cap",
     )
     parser.add_argument("--days-back", type=int, default=2)
+    parser.add_argument("--target-date", type=str, help="Target date YYYY-MM-DD. If provided, sets window from target-date to target-date+1")
+    parser.add_argument("--cleanup-audio", action="store_true", help="Delete audio file after processing to save space")
     parser.add_argument("--exclude-shorts", action="store_true", default=True)
     parser.add_argument("--include-shorts", dest="exclude_shorts", action="store_false")
     parser.add_argument("--min-duration-seconds", type=int, default=180)
@@ -320,9 +322,23 @@ def main() -> int:
     processed_videos = 0
     processed_video_total = 0
     updated_video_total = 0
+
     tz_taipei = timezone(timedelta(hours=8))
-    window_end_dt = datetime.now(tz_taipei)
-    window_start_dt = window_end_dt - timedelta(days=args.days_back)
+    
+    if args.target_date:
+        target_dt = datetime.strptime(args.target_date, "%Y-%m-%d").replace(tzinfo=tz_taipei)
+        window_start_dt = target_dt
+        window_end_dt = target_dt + timedelta(days=1)
+        # Using exact start and end times for fetcher
+        days_back_param = None
+        published_after_dt = window_start_dt
+        published_before_dt = window_end_dt
+    else:
+        window_end_dt = datetime.now(tz_taipei)
+        window_start_dt = window_end_dt - timedelta(days=args.days_back)
+        days_back_param = args.days_back
+        published_after_dt = None
+        published_before_dt = None
 
     for item in analysts:
         if processed_video_total >= max(1, args.max_videos):
@@ -341,7 +357,9 @@ def main() -> int:
             videos = fetcher.get_channel_videos(
                 channel_id=channel_id,
                 max_results=max(1, args.max_videos_per_analyst),
-                days_back=args.days_back,
+                days_back=days_back_param,
+                published_after_dt=published_after_dt,
+                published_before_dt=published_before_dt,
                 exclude_shorts=args.exclude_shorts,
                 min_duration_seconds=args.min_duration_seconds,
             )
@@ -426,7 +444,13 @@ def main() -> int:
     stock_rankings = _build_stock_rankings(analyses)
 
     completed_at_dt = datetime.now(tz_taipei)
-    date_folder = settings.data_reports_dir / "daily" / completed_at_dt.strftime("%Y-%m-%d")
+    if args.target_date:
+        folder_date_str = args.target_date
+    else:
+        folder_date_str = completed_at_dt.strftime("%Y-%m-%d")
+        
+    date_folder = settings.data_reports_dir / "daily" / folder_date_str
+    date_folder.mkdir(parents=True, exist_ok=True)
     timestamp_tag = completed_at_dt.strftime("%Y%m%d_%H%M%S")
 
     dated_md_file = date_folder / f"analyst_stock_matrix_{timestamp_tag}.md"
@@ -476,6 +500,11 @@ def main() -> int:
                 f.write("\n")
     except Exception:
         pass
+
+    if getattr(args, "cleanup_audio", False):
+        print(f"[INFO] Cleaning up audio files older than 0 days...")
+        pipeline.downloader.cleanup_old_files(max_age_days=0)
+        print(f"[INFO] Audio cleanup completed.")
 
     return 0
 

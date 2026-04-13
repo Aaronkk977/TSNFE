@@ -238,7 +238,7 @@ class AudioDownloader(LoggerMixin):
         current_time = time.time()
         max_age_seconds = max_age_days * 24 * 3600
 
-        for file_path in self.output_dir.glob("*.*"):
+        for file_path in self.output_dir.glob("daily/**/*.wav"):
             if file_path.is_file():
                 file_age = current_time - file_path.stat().st_mtime
                 if file_age > max_age_seconds:

@@ -143,6 +143,8 @@ class YouTubeFetcher(LoggerMixin):
         days_back: Optional[int] = 7,
         exclude_shorts: bool = False,
         min_duration_seconds: Optional[int] = None,
+        published_after_dt: Optional[datetime] = None,
+        published_before_dt: Optional[datetime] = None,
     ) -> List[VideoInfo]:
         """
         Get recent videos from a channel.
@@ -153,6 +155,8 @@ class YouTubeFetcher(LoggerMixin):
             days_back: Only fetch videos from last N days (None = all)
             exclude_shorts: Exclude videos that look like Shorts by duration (<= 180s)
             min_duration_seconds: Exclude videos with duration <= this threshold
+            published_after_dt: Start time (overrides days_back if both provided)
+            published_before_dt: End time
 
         Returns:
             List of VideoInfo objects
@@ -160,12 +164,19 @@ class YouTubeFetcher(LoggerMixin):
         self.logger.info(f"Fetching videos from channel: {channel_id}")
 
         # Calculate date threshold
-        if days_back:
+        if published_after_dt:
+            published_after = published_after_dt.isoformat() + "Z"
+        elif days_back:
             published_after = (
                 datetime.utcnow() - timedelta(days=days_back)
             ).isoformat() + "Z"
         else:
             published_after = None
+            
+        if published_before_dt:
+            published_before = published_before_dt.isoformat() + "Z"
+        else:
+            published_before = None
 
         try:
             # Get channel's uploads playlist ID
@@ -207,6 +218,8 @@ class YouTubeFetcher(LoggerMixin):
 
                     # Check date filter
                     if published_after and published_at < published_after:
+                        continue
+                    if published_before and published_at > published_before:
                         continue
 
                     video_info = VideoInfo(
