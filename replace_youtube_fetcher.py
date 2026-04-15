@@ -1,86 +1,21 @@
-"""
-YouTube Data API v3 integration
-Fetch videos from analyst channels
-"""
-
-import json
 import re
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import List, Optional
-from urllib.parse import unquote, urlparse
 
-import yt_dlp
-from urllib.error import HTTPError as HttpError
+with open("src/tw_analyst_pipeline/youtube/fetcher.py", "r") as f:
+    text = f.read()
 
-from ..utils.config import Settings
-from ..utils.logging import LoggerMixin
-from ..utils.retry import retry_with_backoff
+# Add yt_dlp import
+if "import yt_dlp" not in text:
+    text = text.replace("from googleapiclient.discovery import build\nfrom googleapiclient.errors import HttpError", "import yt_dlp\nfrom urllib.error import HTTPError as HttpError")
 
+# Replace _init_youtube_client
+text = re.sub(
+    r"    def _init_youtube_client\(self\):.*?raise\s+", 
+    "    def _init_youtube_client(self):\n        pass  # using yt-dlp instead\n", 
+    text, flags=re.DOTALL
+)
 
-class VideoInfo:
-    """Information about a YouTube video."""
-
-    def __init__(
-        self,
-        video_id: str,
-        title: str,
-        description: str,
-        published_at: str,
-        channel_id: str,
-        channel_title: str,
-        duration: Optional[str] = None,
-        view_count: Optional[int] = None,
-    ):
-        self.video_id = video_id
-        self.title = title
-        self.description = description
-        self.published_at = published_at
-        self.channel_id = channel_id
-        self.channel_title = channel_title
-        self.duration = duration
-        self.view_count = view_count
-
-    def to_dict(self) -> dict:
-        return {
-            "video_id": self.video_id,
-            "title": self.title,
-            "description": self.description,
-            "published_at": self.published_at,
-            "channel_id": self.channel_id,
-            "channel_title": self.channel_title,
-            "duration": self.duration,
-            "view_count": self.view_count,
-        }
-
-    def __repr__(self):
-        return f"VideoInfo(id={self.video_id}, title={self.title[:30]}...)"
-
-
-class YouTubeFetcher(LoggerMixin):
-    """Fetch videos from YouTube channels using Data API v3."""
-
-    def __init__(self, settings: Settings):
-        self.settings = settings
-        self.youtube = None
-        self._init_youtube_client()
-
-    def _init_youtube_client(self):
-        pass  # using yt-dlp instead
-ValueError("YOUTUBE_API_KEY not set in environment")
-
-        try:
-            self.youtube = build(
-                "youtube",
-                "v3",
-                developerKey=self.settings.youtube_api_key,
-            )
-            self.logger.info("YouTube Data API client initialized")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize YouTube client: {e}")
-            raise
-
-    def get_channel_id_from_handle(self, handle: str) -> Optional[str]:
+# Rewrite get_channel_id_from_handle
+new_get_channel_id = """    def get_channel_id_from_handle(self, handle: str) -> Optional[str]:
         handle = handle.strip()
         if not handle: return None
         if not handle.startswith("http"):
@@ -100,9 +35,15 @@ ValueError("YOUTUBE_API_KEY not set in environment")
                     return channel_id
         except Exception as e:
             self.logger.error(f"yt-dlp error fetching channel: {e}")
-        return None
+        return None"""
+text = re.sub(
+    r"    def get_channel_id_from_handle\(self, handle: str\) -> Optional\[str\]:.*?return None\s+(?=    @)",
+    new_get_channel_id + "\n\n",
+    text, flags=re.DOTALL
+)
 
-    def get_channel_videos(
+# Rewrite get_channel_videos
+new_get_channel_videos = """    def get_channel_videos(
         self, channel_id: str, max_results: int = 10, days_back: Optional[int] = 7,
         exclude_shorts: bool = False, min_duration_seconds: Optional[int] = None,
         published_after_dt: Optional[datetime] = None, published_before_dt: Optional[datetime] = None,
@@ -158,6 +99,13 @@ ValueError("YOUTUBE_API_KEY not set in environment")
         except Exception as e:
             self.logger.error(f"yt-dlp error fetching videos: {e}")
             
-        return videos
+        return videos"""
+text = re.sub(
+    r"    @retry_with_backoff.*?(?=class |$)",
+    new_get_channel_videos + "\n\n",
+    text, flags=re.DOTALL
+)
 
+with open("src/tw_analyst_pipeline/youtube/fetcher.py", "w") as f:
+    f.write(text)
 

@@ -16,7 +16,7 @@ LABEL_PRIORITY = {
     "買進": 3,
     "賣出": 2,
     "中立": 1,
-    "模糊": 0,
+    "中立": 0,
 }
 
 
@@ -28,7 +28,7 @@ def normalize_label(label):
     buy_aliases = {"buy", "strong buy", "bullish", "加碼", "買進", "看多", "long"}
     sell_aliases = {"sell", "strong sell", "bearish", "減碼", "賣出", "看空", "short"}
     hold_aliases = {"hold", "neutral", "中立", "觀望", "持有", "wait"}
-    ambiguous_aliases = {"ambiguous", "unclear", "mixed", "模糊", "不明", "不確定"}
+    ambiguous_aliases = {"ambiguous", "unclear", "mixed", "中立", "不明", "不確定"}
 
     if normalized in buy_aliases:
         return "買進"
@@ -37,7 +37,7 @@ def normalize_label(label):
     if normalized in hold_aliases:
         return "中立"
     if normalized in ambiguous_aliases:
-        return "模糊"
+        return "中立"
     return "中立"
 
 

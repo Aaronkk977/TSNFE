@@ -24,13 +24,13 @@ DEFAULT_PROMPT = """
 - action（buy/sell/hold）
 - sentiment_score（0-10）
 - urgency（0-10）
-- label（買進/賣出/中立（持有）/模糊）
+- label（買進/賣出/中立（持有）/中立）
 - label_reason
 - reasoning
 
 規則：
 1) 全量列出影片中提及的可交易台股/ETF/槓反ETF。
-2) 若態度不明，label 必須是模糊。
+2) 若態度不明，label 必須是中立（持有）。
 3) 僅輸出 JSON，不要多餘說明文字。
 """.strip()
 

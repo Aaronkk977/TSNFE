@@ -75,7 +75,7 @@ class BaseLLMExtractor(LoggerMixin):
             return "buy"
         if normalized == "賣出":
             return "sell"
-        if normalized == "模糊":
+        if normalized == "中立":
             return "hold"
         return "hold"
 
@@ -612,7 +612,7 @@ class GoogleExtractor(BaseLLMExtractor):
   "stock_name": "名稱",
   "sentiment_score": 0-10,
   "urgency": 0-10,
-  "label": "買進|賣出|中立（持有）|模糊",
+  "label": "買進|賣出|中立（持有）",
   "label_reason": "標籤理由",
   "reasoning": "簡短依據"
 }}
@@ -868,7 +868,7 @@ class GoogleExtractor(BaseLLMExtractor):
             elif raw_action == "hold":
                 mapped_label = "中立"
 
-            raw_label = item.get("label") or item.get("implied_label") or mapped_label or "模糊"
+            raw_label = item.get("label") or item.get("implied_label") or mapped_label or "中立"
             confidence = 1.0 # Set default confidence to 1.0 as requested
             normalized = normalize_label(raw_label)
 
@@ -1055,16 +1055,16 @@ class GoogleExtractor(BaseLLMExtractor):
                     "sentiment_score": 5.0,
                     "urgency": 3.0,
                     "reasoning": "候選標的已提及，但本輪模型未產出明確判斷。",
-                    "label": "模糊",
-                    "label_reason": "模型未提供可判定的明確態度，暫列模糊。",
+                    "label": "中立",
+                    "label_reason": "模型未提供可判定的明確態度，暫列中立。",
                 }
             else:
                 if not item.get("stock_name"):
                     item["stock_name"] = candidate.get("stock_name", "") or ticker
                 if not item.get("label") and not item.get("implied_label"):
-                    item["label"] = "模糊"
+                    item["label"] = "中立"
                 if not item.get("label_reason"):
-                    item["label_reason"] = "逐字稿態度不夠明確，先標示為模糊。"
+                    item["label_reason"] = "逐字稿態度不夠明確，先標示為中立。"
             final.append(item)
 
         return final
@@ -1114,7 +1114,7 @@ class GoogleExtractor(BaseLLMExtractor):
     def _majority_label(labels: List[str]) -> str:
         if not labels:
             return "中立"
-        counts = {"買進": 0, "中立": 0, "賣出": 0, "模糊": 0}
+        counts = {"買進": 0, "中立": 0, "賣出": 0, "中立": 0}
         for label in labels:
             counts[label] = counts.get(label, 0) + 1
         return max(counts.items(), key=lambda item: item[1])[0]
@@ -1168,10 +1168,10 @@ class GoogleExtractor(BaseLLMExtractor):
 注意：
 - 這是**全量提取任務**，不要只挑一檔代表。
 - 對候選清單中的**每一檔**都要輸出一筆結果，不可遺漏。
-- 若態度不明，label 必須填「模糊」，不可省略該檔。
+- 若態度不明，label 必須填「中立」，不可省略該檔。
 - 若同一檔被多次提及，保留最後一次明確態度。
 - 即使分析師沒有直接說「買進」，若大量正向論述財報/產業前景，應給高分。
-- label 僅可為：買進、賣出、中立（持有）、模糊。
+- label 僅可為：買進、賣出、中立（持有）、中立。
 - 每筆都必須提供 label_reason，解釋為何判定該 label（20~60 字）。
 - reasoning 請精簡（最多 60 字），避免過長。
 - ticker 優先輸出可交易代碼（4-5 位數，可含尾碼字母，例如 00662U）。
@@ -1195,13 +1195,13 @@ class GoogleExtractor(BaseLLMExtractor):
     "ticker": "股票代號",
     "stock_name": "標的名稱",
     "reasoning": "簡短依據",
-    "label": "買進|賣出|中立（持有）|模糊",
+    "label": "買進|賣出|中立（持有）",
     "label_reason": "判定標籤原因"
 }}
 
 規則：
 - 不可新增清單外 ticker。
-- 若資訊不足，label 請填模糊。
+- 若資訊不足，label 請填中立。
 - 只輸出 JSON。
 
 逐字稿：
@@ -1219,13 +1219,13 @@ class GoogleExtractor(BaseLLMExtractor):
     "ticker": "股票代號(4~5碼，可含尾碼字母)",
     "stock_name": "標的名稱",
     "reasoning": "簡短依據（<=40字）",
-    "label": "買進|賣出|中立（持有）|模糊",
+    "label": "買進|賣出|中立（持有）",
     "label_reason": "標籤理由（20~40字）"
 }
 
 規則：
 - 全量提取所有被提及可交易標的（股票/ETF/槓反ETF）。
-- 若態度不明，label 必須為「模糊」，不能省略。
+- 若態度不明，label 必須為「中立」，不能省略。
 - 嚴格排除「年份/年代/價格/數量」等數字（例如 1987、1970、1000）作為 ticker。
 - 若 stock_name 與 ticker 對不上（例如 2002 卻填威剛），該筆不得輸出。
 - 僅輸出 JSON，不要其他文字。
@@ -1244,13 +1244,13 @@ class GoogleExtractor(BaseLLMExtractor):
     "ticker": "股票代號(4~5碼，可含尾碼字母)",
     "stock_name": "標的名稱",
     "reasoning": "簡短依據（<=40字）",
-    "label": "買進|賣出|中立（持有）|模糊",
+    "label": "買進|賣出|中立（持有）",
     "label_reason": "標籤理由（20~40字）"
 }}
 
 規則：
 - 全量提取所有被提及可交易標的（股票/ETF/槓反ETF）。
-- 若態度不明，label 必須為「模糊」，不能省略。
+- 若態度不明，label 必須為「中立」，不能省略。
 - 嚴格排除「年份/年代/價格/數量」等數字（例如 1987、1970、1000）作為 ticker。
 - 若 stock_name 與 ticker 對不上（例如 2002 卻填威剛），該筆不得輸出。
 - 僅輸出 JSON，不要其他文字。
