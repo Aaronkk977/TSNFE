@@ -907,12 +907,12 @@ class GoogleExtractor(BaseLLMExtractor):
     @staticmethod
     def _normalize_ticker(raw_ticker: str) -> str:
         ticker = str(raw_ticker or "").strip().upper()
-        if ticker.isdigit() and len(ticker) <= 4:
+        if ticker.isdigit() and len(ticker) < 4:
             return ticker.zfill(4)
         return ticker
 
     def _extract_ticker_mentions(self, transcript: str) -> List[str]:
-        pattern = re.compile(r"(?<!\d)(\d{4,5}[A-Z]?)(?!\d)")
+        pattern = re.compile(r"(?<!\d)(\d{4,6}[A-Z]?)(?!\d)")
         seen = set()
         ordered = []
         upper_text = transcript.upper()
@@ -949,7 +949,7 @@ class GoogleExtractor(BaseLLMExtractor):
     def _is_plausible_tw_ticker(ticker: str) -> bool:
         if re.fullmatch(r"\d{4}", ticker):
             return True
-        if re.fullmatch(r"00\d{3}[A-Z]?", ticker):
+        if re.fullmatch(r"\d{5,6}[A-Z]?", ticker):
             return True
         return False
 
@@ -1168,7 +1168,7 @@ class GoogleExtractor(BaseLLMExtractor):
 - label 僅可為：買進、賣出、中立（持有）、中立。
 - 每筆都必須提供 label_reason，解釋為何判定該 label（20~60 字）。
 - reasoning 請精簡（最多 60 字），避免過長。
-- ticker 優先輸出可交易代碼（4-5 位數，可含尾碼字母，例如 00662U）。
+- ticker 優先輸出可交易代碼（4-6 位數，可含尾碼字母，例如 00662U）。
 - 如果完全沒有可提取標的，請輸出空陣列 []。
 - 僅輸出 JSON，不要加入額外說明。
 
@@ -1210,7 +1210,7 @@ class GoogleExtractor(BaseLLMExtractor):
 
 請輸出 JSON 陣列，每筆格式：
 {
-    "ticker": "股票代號(4~5碼，可含尾碼字母)",
+    "ticker": "股票代號(4~6碼，可含尾碼字母)",
     "stock_name": "標的名稱",
     "reasoning": "簡短依據（<=40字）",
     "label": "買進|賣出|中立（持有）",
@@ -1235,7 +1235,7 @@ class GoogleExtractor(BaseLLMExtractor):
 
 請輸出 JSON 陣列，每筆格式：
 {{
-    "ticker": "股票代號(4~5碼，可含尾碼字母)",
+    "ticker": "股票代號(4~6碼，可含尾碼字母)",
     "stock_name": "標的名稱",
     "reasoning": "簡短依據（<=40字）",
     "label": "買進|賣出|中立（持有）",
@@ -1372,8 +1372,13 @@ class LLMExtractorFactory:
         Raises:
             ValueError: If provider is not supported
         """
-
         provider = provider or settings.llm_provider
+        
+        # Lazy load local_hf to avoid circular imports or heavy torch loading if not needed
+        if provider.lower() == "local_hf" and "local_hf" not in cls._extractors:
+            from .local_hf_extractor import LocalHuggingFaceExtractor
+            cls._extractors["local_hf"] = LocalHuggingFaceExtractor
+            
         extractor_class = cls._extractors.get(provider.lower())
 
         if not extractor_class:

@@ -83,6 +83,25 @@ def main():
         default=None,
         help="Override LLM model (e.g. gemini-2.5-pro)",
     )
+    parser.add_argument(
+        "--llm-provider",
+        type=str,
+        default=None,
+        choices=["openai", "anthropic", "gemini", "google", "qwen", "local_hf"],
+        help="Override LLM provider",
+    )
+    parser.add_argument(
+        "--llm-temperature",
+        type=float,
+        default=None,
+        help="Override LLM temperature",
+    )
+    parser.add_argument(
+        "--llm-max-tokens",
+        type=int,
+        default=None,
+        help="Override maximum tokens for LLM response",
+    )
 
     args = parser.parse_args()
 
@@ -92,10 +111,28 @@ def main():
     # Create pipeline
     try:
         settings = get_settings()
+        if args.llm_provider:
+            settings.llm_provider = args.llm_provider
+            try:
+                settings.model_fields_set.add("llm_provider")
+            except Exception:
+                pass
         if args.llm_model:
             settings.llm_model = args.llm_model
             try:
                 settings.model_fields_set.add("llm_model")
+            except Exception:
+                pass
+        if args.llm_temperature is not None:
+            settings.llm_temperature = args.llm_temperature
+            try:
+                settings.model_fields_set.add("llm_temperature")
+            except Exception:
+                pass
+        if args.llm_max_tokens is not None:
+            settings.llm_max_tokens = args.llm_max_tokens
+            try:
+                settings.model_fields_set.add("llm_max_tokens")
             except Exception:
                 pass
         pipeline_config = get_pipeline_config()

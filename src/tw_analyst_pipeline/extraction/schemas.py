@@ -52,7 +52,7 @@ def normalize_label(label: Optional[str]) -> str:
 class StockSignal(BaseModel):
     """Single stock signal extracted from analyst video."""
 
-    stock_code: str = Field(..., pattern=r"^(?:\d{4,5}[A-Z]?|XXXX|UNKNOWN|N/A)?$", description="Taiwan stock code. Leave empty or use XXXX if unknown.")
+    stock_code: str = Field(..., pattern=r"^(?:\d{4,6}[A-Z]?|XXXX|UNKNOWN|N/A)?$", description="Taiwan stock code (4-6 digits, optional trailing letter). Leave empty or use XXXX if unknown.")
     stock_name: str = Field(..., description="Stock name or company name")
     action: TradeAction = Field(..., description="Trading action: buy, sell, or hold")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
@@ -159,7 +159,7 @@ class TranscriptResult(BaseModel):
 class RecommendationStock(BaseModel):
     """Stock item for recommendation feature list."""
 
-    stock_code: str = Field(..., pattern=r"^\d{4,5}[A-Z]?$")
+    stock_code: str = Field(..., pattern=r"^\d{4,6}[A-Z]?$")
     stock_name: str = Field(...)
     label: str = Field(..., description="買進/中立/賣出")
 

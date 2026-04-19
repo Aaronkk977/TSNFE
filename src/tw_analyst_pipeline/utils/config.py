@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
+    hugging_face_api_key: Optional[str] = None
 
     llm_provider: str = "gemini"  # openai, anthropic, gemini
     llm_model: str = "gemini-2.5-flash"

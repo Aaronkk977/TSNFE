@@ -53,7 +53,7 @@ youtube:
   
   # Video filters
   min_video_length_seconds: 300      # Skip videos < 5 minutes
-  max_video_length_seconds: 7200     # Skip videos > 2 hours
+  max_video_length_seconds: 5400     # Skip videos > 2 hours
   
   # Download format
   download_format: "wav"             # wav (best for Whisper), mp3, m4a
@@ -107,11 +107,28 @@ transcription:
 # ============================================================================
 extraction:
   # Provider: openai, anthropic, gemini
+  # Set to "local_hf" to use the local open-source Qwen model via transformers
   provider: "gemini"
   
   # Model selection per provider
   models:
     gemini: "gemini-2.5-pro"
+    local_hf: "Qwen/Qwen3.6-35B-A3B"
+
+  # Local Hugging Face extraction settings
+  local_hf:
+    # Community pre-quantized AWQ 4-bit model
+    model: "QuantTrio/Qwen3.6-35B-A3B-AWQ"
+    # Deterministic extraction is recommended for signal parsing
+    temperature: 0.0
+    # Enough for the JSON response while keeping generation bounded
+    max_tokens: 4096
+    # Keep remote code enabled for Qwen tokenizer/model compatibility
+    trust_remote_code: true
+    # Use automatic device placement across available GPUs
+    device_map: "auto"
+    # Optional: set to "flash_attention_2" only if flash-attn is installed successfully
+    attn_implementation: null
   
   # Temperature (0.0-1.0)
   temperature: 0.1                   # Lower = more deterministic
@@ -156,7 +173,7 @@ stock_data:
   fugle_base_url: "https://api.fugle.tw/marketdata/v1.0"
   
   # Stock code format validation
-  code_pattern: "^\\d{4}$"           # 4-digit Taiwan stock code
+  code_pattern: "^\\d{4,6}[A-Z]?$"   # 4-6 digit Taiwan stock/ETF code, optional suffix letter
   
   # Alias resolution
   resolve_aliases: true
@@ -225,33 +242,66 @@ logging:
 # ============================================================================
 prompts:
   system: |
-    你是專業的台灣股市分析助手。從投顧分析師的影片逐字稿中精準提取股票買賣訊號。
+    你是一位專業的台股量化分析助手。你的任務是將非結構化的投顧分析逐字稿，轉譯為標準化 JSON 訊號。
     
-    核心職責：
-    1. 識別明確的股票推薦（不包含歷史回顧或假設性討論）
-    2. 確保股票代碼為台股 4 位數格式（如 2330、0050）
-    3. 判斷情感時注意語氣與上下文（「不建議」= 賣出）
-    4. 推論台灣投資人常用的股票別名（如「護國神山」→ 2330）
+    【提取與判斷規則】
+    0. 實名點名原則（最嚴格限制）：必須是分析師在影片中「明確開口念出」的股票名稱或代碼才可提取。絕不可因分析師提及某產業就自行推敲該產業的代表性股票
+    1. 語意轉換：分析師極少直接說「買/賣」，請依據台股慣用語判斷：
+      - 判定為 buy：逢低佈局、拉回找買點、長線看好、上漲空間大、樂觀看待、突破壓力線。
+      - 判定為 sell：建議避開、逢高減碼、形態弱勢、破底/破線、主力倒貨。
+      - 判定為 hold：先觀望、等表態、區間震盪、持有者續抱。
+    2. 股票代碼補全：若分析師只說出公司簡稱（如：台積電），請務必自行補上正確的台股代碼（大多爲四位數，如：2330）。
+    3. 排除雜訊：嚴格忽略「歷史回顧」、「假設性預測（如果...就...）」以及「大盤/總經」的討論。
+    4. 最後定論：若同段影片重複提及同一檔股票，以「最後一次」的結論為準。
+
+    【輸出格式要求】
+    - 必須且只能回傳一個標準的 JSON Array 格式。不要有任何 Markdown 標記（如 ```json）、不要有任何前言或結語。
+    - 如果整段逐字稿中「沒有提到任何具體股票」或「沒有明確買賣訊號」，請嚴格回傳一個空的陣列：[]
+    - 陣列內的每個 JSON Object 必須包含以下欄位：
+      - "stock_code": (字串) 台股 4 位數代碼
+      - "stock_name": (字串) 公司名稱
+      - "action": (字串) 只能是 "buy", "sell", 或 "hold"
+      - "reasoning": (字串) 分析師明確說過的推薦理由，濃縮在 20 字以內。
   
   extraction: |
-    從以下投顧分析師影片逐字稿中，精確提取**所有股票買賣訊號**：
+    請根據上述系統規則，從以下逐字稿中精確提取「實質買賣訊號」。
     
     --------
     {transcript}
     --------
+
+    請嚴格遵守實名點名原則，提取後直接輸出 JSON。
+
+  system_qwen: |
+    你是一位專業的台股量化分析助手。你的任務是將非結構化的投顧分析逐字稿，轉譯為標準化 JSON 訊號。
     
-    請回傳標準 JSON 格式，包含：
-    - stock_code: 台股 4 位數代碼
-    - stock_name: 公司名稱或股票簡稱
-    - action: buy（買進/加碼）、sell（賣出/出脫）或 hold（持有/觀望）
-    - confidence: 信心度 0.0-1.0
-    - reasoning: 分析師明確說過的推會理由（1-2 句）
+    【提取與判斷規則】
+    0. 實名點名原則（最嚴格限制）：必須是分析師在影片中「明確開口念出」的股票名稱或代碼才可提取。絕不可因分析師提及某產業（如：矽光子）就自行推敲補上該產業的代表性股票
+    1. 語意轉換：分析師極少直接說「買/賣」，請依據台股慣用語判斷：
+      - 判定為 buy：逢低佈局、拉回找買點、長線看好、上漲空間大、樂觀看待、突破壓力線。
+      - 判定為 sell：建議避開、逢高減碼、形態弱勢、破底/破線、主力倒貨。
+      - 判定為 hold：先觀望、等表態、區間震盪、持有者續抱。
+    2. 股票代碼補全：若分析師只說出公司簡稱（如：台積電、聯亞），請務必自行補上正確的台股代碼（大多爲四位數，如：2330、3081）。
+    3. 排除雜訊：嚴格忽略「歷史回顧」、「假設性預測（如果...就...）」以及「大盤/總經」的討論。
+    4. 最後定論：若同段影片重複提及同一檔股票，以該分析師「最後一次」的結論為準。
+
+    【輸出格式要求】
+    - 必須且只能回傳一個標準的 JSON Array 格式。不要有任何 Markdown 標記（如 ```json）、不要有任何前言或結語。
+    - 如果整段逐字稿中「沒有提到任何具體股票」或「沒有明確買賣訊號」，請嚴格回傳一個空的陣列：[]
+    - 陣列內的每個 JSON Object 必須包含以下欄位：
+      - "stock_code": (字串) 台股 4 位數代碼
+      - "stock_name": (字串) 公司名稱或股票簡稱
+      - "action": (字串) 只能是 "buy", "sell", 或 "hold"
+      - "reasoning": (字串) 分析師明確說過的推薦理由，請濃縮在 20 字以內。
+
+  extraction_qwen: |
+    請根據上述系統規則，從以下逐字稿中精確提取「實質買賣訊號」。
     
-    **重要提醒**：
-    - 這是全量提取任務：若提到多檔標的，必須全部列出，不可只回傳一檔
-    - 忽略分析師的歷史回顧或假設性言論（「如果...就會...」）
-    - 只提取主要訊號，忽略閒聊或題外話
-    - 若多次提及同股不同看法，記錄最後一次的動作
+    --------
+    {transcript}
+    --------
+
+    請嚴格遵守實名點名原則，提取後直接輸出 JSON。
 
 # ============================================================================
 # Provider-Specific Settings

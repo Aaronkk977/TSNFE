@@ -2,12 +2,17 @@ import requests
 import csv
 import os
 import logging
+import re
+from io import StringIO
+
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 TWSE_EQUITIES_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 TPEX_EQUITIES_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+TWSE_ISIN_URL = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "stock_codes")
 TWSE_OUTPUT_FILE = os.path.join(OUTPUT_DIR, "twse_stocks.csv")
 TPEX_OUTPUT_FILE = os.path.join(OUTPUT_DIR, "tpex_stocks.csv")
@@ -66,6 +71,73 @@ def fetch_json(url):
         logger.error(f"Failed to fetch from {url}: {e}")
         return []
 
+
+def fetch_twse_etf_etn_list():
+    """Fetch ETF/ETN listings from TWSE ISIN page.
+
+    The official stock open APIs mainly cover listed/OTC companies. ETF/ETN symbols
+    are more complete on the ISIN list page, so we merge them into local stock codes.
+    """
+    try:
+        response = requests.get(TWSE_ISIN_URL, timeout=30)
+        response.raise_for_status()
+        # TWSE ISIN page is typically big5-based. Fall back to apparent encoding.
+        response.encoding = response.apparent_encoding or "big5"
+
+        tables = pd.read_html(StringIO(response.text), flavor="lxml")
+        if not tables:
+            return {}
+
+        df = tables[0]
+        if df.empty or df.shape[1] == 0:
+            return {}
+
+        etf_like = {}
+        current_section = ""
+
+        for raw_value in df.iloc[:, 0].tolist():
+            value = str(raw_value or "").replace("\u3000", " ").strip()
+            if not value or value.lower() == "nan":
+                continue
+
+            # Section titles in this table include strings like
+            # "受益證券-ETF" / "受益證券-ETN" / "...槓桿/反向...".
+            if "ETF" in value or "ETN" in value:
+                current_section = value
+                continue
+
+            # Skip until ETF/ETN sections begin.
+            if not current_section:
+                continue
+
+            # When section changes to non ETF/ETN groups, stop collecting.
+            if "ETF" not in current_section and "ETN" not in current_section:
+                continue
+
+            # First column stores code+name, e.g. "006208 富邦台50".
+            match = re.match(r"^([0-9]{4,6}[A-Z]?)\s+(.+)$", value)
+            if not match:
+                continue
+
+            code = match.group(1).strip().upper()
+            name = match.group(2).strip()
+            if not re.match(r"^\d{4,6}[A-Z]?$", code):
+                continue
+            if not name:
+                continue
+
+            etf_like[code] = {
+                "code": code,
+                "name": name,
+                "english_name": "",
+            }
+
+        return etf_like
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch ETF/ETN list from TWSE ISIN: {e}")
+        return {}
+
 def main():
     logger.info("Fetching TWSE listed companies...")
     twse_data = fetch_json(TWSE_EQUITIES_URL)
@@ -89,10 +161,21 @@ def main():
     combined_stocks.update(twse_stocks)
     combined_stocks.update(tpex_stocks)
 
+    logger.info("Fetching ETF/ETN instruments from TWSE ISIN page...")
+    etf_etn_stocks = fetch_twse_etf_etn_list()
+    if etf_etn_stocks:
+        logger.info("Fetched %s ETF/ETN records", len(etf_etn_stocks))
+        for code, record in etf_etn_stocks.items():
+            # TWSE file should contain listed ETFs/ETNs for local validation.
+            twse_stocks[code] = record
+            combined_stocks[code] = record
+    else:
+        logger.warning("No ETF/ETN records fetched from TWSE ISIN page")
+
     # Prepare directories
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Ensure important ETFs are also added if not present
+    # Keep a tiny fallback list in case remote ETF source is temporarily unavailable.
     default_etfs = [
         {'code': '0050', 'name': '元大台灣50', 'english_name': 'Yuanta Taiwan 50'},
         {'code': '0056', 'name': '元大高股息', 'english_name': 'Yuanta High Dividend'},

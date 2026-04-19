@@ -7,6 +7,12 @@ conda create -n tw-analyst python=3.10 -y
 conda activate tw-analyst
 pip install -r requirements-dev.txt
 pip install -e .
+
+# 可選：若你使用 local_hf + AWQ 並希望啟用 Flash Attention 2
+# 需先確保 torch 已安裝，再用 no-build-isolation 安裝
+pip install flash-attn --no-build-isolation
+
+# 若這一步仍失敗，先跳過即可；模型可直接用 attn_implementation: null 跑起來
 ```
 
 ## 2. 設定 API Keys

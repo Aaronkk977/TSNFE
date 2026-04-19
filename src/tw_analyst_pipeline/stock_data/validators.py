@@ -31,13 +31,21 @@ class StockValidator(LoggerMixin):
 
     def _load_valid_codes(self):
         """Load valid Taiwan stock codes from CSV files."""
-        data_dir = Path(self.settings.data_stock_codes_dir)
+        data_dirs = self._candidate_stock_code_dirs()
+        csv_files = []
+        seen_files = set()
+        for data_dir in data_dirs:
+            for csv_file in sorted(data_dir.glob("*.csv")):
+                resolved = csv_file.resolve()
+                if resolved in seen_files:
+                    continue
+                seen_files.add(resolved)
+                csv_files.append(csv_file)
 
-        csv_files = list(data_dir.glob("*.csv"))
         if not csv_files:
             self.logger.warning(
                 "No stock code CSV found under %s. Stock validation will reject all local-unknown codes.",
-                data_dir,
+                ", ".join(str(p) for p in data_dirs),
             )
             return
 
@@ -45,18 +53,42 @@ class StockValidator(LoggerMixin):
         # Load from CSV files
         for csv_file in csv_files:
             try:
-                with open(csv_file, "r", encoding="utf-8") as f:
+                with open(csv_file, "r", encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
+                    file_loaded = 0
                     for row in reader:
-                        code = row.get("code") or row.get("stock_code") or row.get("Code")
-                        name = row.get("name") or row.get("stock_name") or row.get("Name")
+                        code = self._get_row_value(
+                            row,
+                            "code",
+                            "stock_code",
+                            "ticker",
+                            "symbol",
+                        )
+                        name = self._get_row_value(
+                            row,
+                            "name",
+                            "stock_name",
+                            "company_name",
+                        )
 
                         if code:
-                            code = str(code).strip().zfill(4)
+                            code = str(code).strip().upper()
+                            if code.isdigit() and len(code) < 4:
+                                code = code.zfill(4)
+                            if not re.match(r"^\d{4,6}[A-Z]?$", code):
+                                continue
+
                             self.valid_codes.add(code)
+                            file_loaded += 1
 
                             if name:
                                 self.stock_names[code] = str(name).strip()
+
+                    if file_loaded == 0:
+                        self.logger.warning(
+                            "No valid stock codes parsed from %s; please verify CSV headers include code/stock_code.",
+                            csv_file,
+                        )
                 loaded_files += 1
 
             except Exception as e:
@@ -73,6 +105,51 @@ class StockValidator(LoggerMixin):
                 "Stock universe is unusually small (%s). Please provide full TWSE/TPEX/ETF code lists.",
                 len(self.valid_codes),
             )
+
+    def _candidate_stock_code_dirs(self) -> List[Path]:
+        configured_dir = Path(self.settings.data_stock_codes_dir)
+        candidates: List[Path] = []
+
+        # Keep configured behavior first.
+        candidates.append(configured_dir)
+
+        # If configured path is relative, also resolve from current working dir and repo root.
+        if not configured_dir.is_absolute():
+            candidates.append((Path.cwd() / configured_dir).resolve())
+            repo_root = Path(__file__).resolve().parents[3]
+            candidates.append((repo_root / configured_dir).resolve())
+
+        existing: List[Path] = []
+        seen = set()
+        for path in candidates:
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if resolved.exists() and resolved.is_dir():
+                existing.append(resolved)
+
+        # Return all candidates if none exists to keep warning message informative.
+        return existing or candidates
+
+    @staticmethod
+    def _get_row_value(row: Dict[str, str], *candidate_keys: str) -> Optional[str]:
+        if not isinstance(row, dict):
+            return None
+
+        normalized = {
+            str(k).replace("\ufeff", "").strip().lower(): v
+            for k, v in row.items()
+            if k is not None
+        }
+        for key in candidate_keys:
+            value = normalized.get(key.lower())
+            if value is not None and str(value).strip() != "":
+                return str(value).strip()
+        return None
 
     def _load_aliases(self):
         """Load stock aliases from JSON file."""
@@ -183,7 +260,7 @@ class StockValidator(LoggerMixin):
 
         if provider != "fugle":
             # Allow ETF patterns (usually starting with 00) to pass validation
-            if code.startswith("00") and re.match(r"^\d{4,5}[A-Z]?$", code):
+            if code.startswith("00") and re.match(r"^\d{4,6}[A-Z]?$", code):
                 return True
             return local_valid
 
@@ -194,7 +271,7 @@ class StockValidator(LoggerMixin):
         if local_valid:
             return True
 
-        if not re.match(r"^\d{4,5}[A-Z]?$", code):
+        if not re.match(r"^\d{4,6}[A-Z]?$", code):
             return False
 
         return self._validate_with_fugle(code)

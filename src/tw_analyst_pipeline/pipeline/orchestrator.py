@@ -51,6 +51,8 @@ class SignalPipeline(LoggerMixin):
         self.settings = settings
         self.config = pipeline_config
 
+        self._apply_extraction_overrides_from_config()
+
         # Initialize components
         self.downloader = AudioDownloader(settings)
         self.transcriber = TranscriberFactory.create(settings)
@@ -65,6 +67,28 @@ class SignalPipeline(LoggerMixin):
                 self.logger.warning(f"YouTube metadata fetcher unavailable: {e}")
         self.error_log: List[ProcessingError] = []
         self._has_requested_download = False
+
+    def _apply_extraction_overrides_from_config(self) -> None:
+        """Apply YAML extraction settings when they are explicitly configured."""
+        provider = (self.config.get("extraction.provider") or "").strip().lower()
+        local_model = (self.config.get("extraction.local_hf.model") or "").strip()
+        local_temperature = self.config.get("extraction.local_hf.temperature")
+        local_max_tokens = self.config.get("extraction.local_hf.max_tokens")
+
+        if provider:
+            self.settings.llm_provider = provider
+
+        if provider == "local_hf":
+            if not local_model:
+                local_model = (self.config.get("extraction.models.local_hf") or "").strip()
+            if local_model:
+                self.settings.llm_model = local_model
+
+            if local_temperature is not None:
+                self.settings.llm_temperature = float(local_temperature)
+
+            if local_max_tokens is not None:
+                self.settings.llm_max_tokens = int(local_max_tokens)
 
     def process_video(
         self,

@@ -91,7 +91,7 @@ def _sleep_before_next_video(processed_videos: int) -> None:
     if processed_videos <= 0:
         return
 
-    delay_seconds = random.uniform(15, 30)
+    delay_seconds = random.uniform(5, 15)
     print(f"[INFO] Sleeping {delay_seconds:.1f}s before next video")
     time.sleep(delay_seconds)
 
@@ -299,11 +299,60 @@ def main() -> int:
     parser.add_argument("--mode", choices=["audio", "url", "text"], default=None)
     parser.add_argument("--text-source", choices=["auto", "cc", "gemini"], default=None)
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
+    parser.add_argument(
+        "--llm-provider",
+        type=str,
+        default=None,
+        choices=["openai", "anthropic", "gemini", "google", "qwen", "local_hf"],
+        help="Override LLM provider for extraction",
+    )
+    parser.add_argument(
+        "--llm-model",
+        type=str,
+        default=None,
+        help="Override LLM model for extraction",
+    )
+    parser.add_argument(
+        "--llm-temperature",
+        type=float,
+        default=None,
+        help="Override LLM temperature",
+    )
+    parser.add_argument(
+        "--llm-max-tokens",
+        type=int,
+        default=None,
+        help="Override maximum tokens for LLM response",
+    )
     args = parser.parse_args()
 
     setup_logging(level=args.log_level)
 
     settings = get_settings()
+    if args.llm_provider:
+        settings.llm_provider = args.llm_provider
+        try:
+            settings.model_fields_set.add("llm_provider")
+        except Exception:
+            pass
+    if args.llm_model:
+        settings.llm_model = args.llm_model
+        try:
+            settings.model_fields_set.add("llm_model")
+        except Exception:
+            pass
+    if args.llm_temperature is not None:
+        settings.llm_temperature = args.llm_temperature
+        try:
+            settings.model_fields_set.add("llm_temperature")
+        except Exception:
+            pass
+    if args.llm_max_tokens is not None:
+        settings.llm_max_tokens = args.llm_max_tokens
+        try:
+            settings.model_fields_set.add("llm_max_tokens")
+        except Exception:
+            pass
     pipeline_config = get_pipeline_config()
 
     mode = (args.mode or pipeline_config.get("execution.mode", "audio") or "audio").lower()
