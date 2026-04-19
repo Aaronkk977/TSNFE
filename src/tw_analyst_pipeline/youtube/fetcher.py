@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import unquote, urlparse
 
+ 
 import yt_dlp
 from urllib.error import HTTPError as HttpError
 
@@ -66,19 +67,25 @@ class YouTubeFetcher(LoggerMixin):
         self._init_youtube_client()
 
     def _init_youtube_client(self):
-        pass  # using yt-dlp instead
-ValueError("YOUTUBE_API_KEY not set in environment")
+        # Keep this method for compatibility; channel/video fetch now uses yt-dlp.
+        self.youtube = None
 
-        try:
-            self.youtube = build(
-                "youtube",
-                "v3",
-                developerKey=self.settings.youtube_api_key,
-            )
-            self.logger.info("YouTube Data API client initialized")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize YouTube client: {e}")
-            raise
+    @staticmethod
+    def _seconds_to_iso8601_duration(seconds: Optional[int]) -> Optional[str]:
+        if seconds is None:
+            return None
+        total = int(seconds)
+        hours = total // 3600
+        minutes = (total % 3600) // 60
+        secs = total % 60
+        parts = []
+        if hours:
+            parts.append(f"{hours}H")
+        if minutes:
+            parts.append(f"{minutes}M")
+        if secs or not parts:
+            parts.append(f"{secs}S")
+        return "PT" + "".join(parts)
 
     def get_channel_id_from_handle(self, handle: str) -> Optional[str]:
         handle = handle.strip()
@@ -89,6 +96,8 @@ ValueError("YOUTUBE_API_KEY not set in environment")
         ydl_opts = {
             'extract_flat': True,
             'quiet': True,
+            'no_warnings': True,
+            'no_warnings': True,
             'playlistend': 1,
         }
         try:
@@ -120,19 +129,73 @@ ValueError("YOUTUBE_API_KEY not set in environment")
         ydl_opts = {
             'extract_flat': True,
             'quiet': True,
-            'playlistend': max_results * 2, # Fetch more to account for filters
+            'no_warnings': True,
+            'no_warnings': True,
+            'playlistend': 2000 if published_after_dt else (max_results * 2), # Increased for historical fetch
         }
         videos = []
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 entries = info.get('entries', [])
+                if before_dt and entries and entries[0].get('timestamp') is None:
+                    self.logger.info("Using binary search for date range (yt-dlp returned no timestamps)")
+                    from datetime import timezone
+                    low, high = 0, len(entries) - 1
+                    start_idx = 0
+                    def fetch_dt(idx):
+                        e = entries[idx]
+                        if not e: return None
+                        vid_url = f"https://www.youtube.com/watch?v={e.get('id')}"
+                        try:
+                            opts = {'quiet': True,
+            'no_warnings': True,
+            'no_warnings': True, 'extract_flat': 'in_playlist'}
+                             
+                            with yt_dlp.YoutubeDL(opts) as inner_ydl:
+                                d = inner_ydl.extract_info(vid_url, download=False)
+                                ts = d.get('timestamp')
+                                if ts:
+                                    return datetime.utcfromtimestamp(ts).replace(tzinfo=timezone.utc)
+                        except: pass
+                        return None
+                    
+                    while low <= high:
+                        mid = (low + high) // 2
+                        dt_val = fetch_dt(mid)
+                        if not dt_val:
+                            low = mid + 1
+                            continue
+                        if dt_val > before_dt:
+                            low = mid + 1
+                        else:
+                            start_idx = mid
+                            high = mid - 1
+                    entries = entries[start_idx:]
+                    self.logger.info(f"Skipped {start_idx} newer videos.")
+
                 for entry in entries:
                     if not entry: continue
                     pub_timestamp = entry.get('timestamp')
+                    if pub_timestamp is None:
+                        # Extract the true timestamp to respect boundaries
+                        vid_url = f"https://www.youtube.com/watch?v={entry.get('id')}"
+                        try:
+                            opts = {'quiet': True,
+            'no_warnings': True,
+            'no_warnings': True, 'extract_flat': 'in_playlist'}
+                             
+                            with yt_dlp.YoutubeDL(opts) as inner_ydl:
+                                d = inner_ydl.extract_info(vid_url, download=False)
+                                pub_timestamp = d.get('timestamp')
+                        except:
+                            pass
                     if pub_timestamp:
                         dt = datetime.utcfromtimestamp(pub_timestamp)
-                        if after_dt and dt < after_dt: continue
+                        if dt.tzinfo is None:
+                            from datetime import timezone
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        if after_dt and dt < after_dt: break
                         if before_dt and dt > before_dt: continue
                         pub_str = dt.isoformat() + "Z"
                     else:
@@ -159,5 +222,45 @@ ValueError("YOUTUBE_API_KEY not set in environment")
             self.logger.error(f"yt-dlp error fetching videos: {e}")
             
         return videos
+
+    def get_video_details(self, video_ids: List[str]) -> List[VideoInfo]:
+        """Fetch per-video metadata using yt-dlp for orchestrator compatibility."""
+        if not video_ids:
+            return []
+
+        infos: List[VideoInfo] = []
+        ydl_opts = {
+            "quiet": True, "no_warnings": True, "no_warnings": True,
+            "skip_download": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            for video_id in video_ids:
+                url = f"https://www.youtube.com/watch?v={video_id}"
+                try:
+                    detail = ydl.extract_info(url, download=False)
+                    duration_iso = self._seconds_to_iso8601_duration(detail.get("duration"))
+                    published_timestamp = detail.get("timestamp")
+                    published_at = (
+                        datetime.utcfromtimestamp(published_timestamp).isoformat() + "Z"
+                        if published_timestamp
+                        else ""
+                    )
+                    infos.append(
+                        VideoInfo(
+                            video_id=detail.get("id") or video_id,
+                            title=detail.get("title") or "",
+                            description=detail.get("description") or "",
+                            published_at=published_at,
+                            channel_id=detail.get("channel_id") or "",
+                            channel_title=detail.get("uploader") or "",
+                            duration=duration_iso,
+                            view_count=detail.get("view_count"),
+                        )
+                    )
+                except Exception as e:
+                    self.logger.warning(f"yt-dlp failed to fetch video details for {video_id}: {e}")
+
+        return infos
 
 

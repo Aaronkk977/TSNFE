@@ -490,8 +490,7 @@ class AnthropicExtractor(BaseLLMExtractor):
                 signals=signals,
                 transcript_length_chars=len(transcript),
                 processing_duration_seconds=processing_time,
-                confidence_score=self._calculate_confidence(signals),
-            )
+                )
 
             self.logger.info(
                 f"Extracted {len(signals)} signals in {processing_time:.1f}s"
@@ -858,6 +857,8 @@ class GoogleExtractor(BaseLLMExtractor):
             stock_code = str(raw_stock_code).strip().upper()
             if stock_code.isdigit():
                 stock_code = stock_code.zfill(4)
+            if stock_code in ["XXXX", "UNKNOWN", "N/A"]:
+                stock_code = ""
 
             raw_action = str(item.get("action", "")).strip().lower()
             mapped_label = ""
@@ -882,9 +883,7 @@ class GoogleExtractor(BaseLLMExtractor):
                         action=self._action_from_label(raw_label),
                         confidence=float(item.get("confidence", confidence) or confidence),
                         reasoning=item.get("reasoning", ""),
-                        sentiment_score=None,
-                        urgency=None,
-                        implied_label=raw_label,
+                                                implied_label=raw_label,
                         normalized_label=normalized,
                         label_reason=item.get("label_reason") or item.get("reasoning", ""),
                     )
@@ -903,11 +902,6 @@ class GoogleExtractor(BaseLLMExtractor):
             signals=signals,
             transcript_length_chars=transcript_length_chars,
             processing_duration_seconds=processing_time,
-            confidence_score=self._calculate_confidence(signals),
-            sentiment_score=None,
-            urgency=None,
-            implied_label=normalized_label,
-            normalized_label=normalized_label,
         )
 
     @staticmethod
@@ -1258,11 +1252,100 @@ class GoogleExtractor(BaseLLMExtractor):
         return prompt_template.format(youtube_url=youtube_url).strip()
 
 
+
+class QwenOpenAIExtractor(OpenAIExtractor):
+    """Extractor for Qwen2.5-14B-Instruct via OpenAI compatible API with sliding window chunking."""
+
+    def _chunk_transcript(self, transcript: str, chunk_size: int = 15000, overlap: int = 2000) -> list:
+        """Split transcript into chunks approx 20-mins long with overlap."""
+        if len(transcript) <= chunk_size:
+            return [transcript]
+        chunks = []
+        start = 0
+        while start < len(transcript):
+            end = min(start + chunk_size, len(transcript))
+            chunks.append(transcript[start:end])
+            if end == len(transcript):
+                break
+            start += (chunk_size - overlap)
+        return chunks
+
+    def extract_signals(
+        self,
+        transcript: str,
+        video_id: str,
+        analyst_name: Optional[str] = None,
+    ) -> VideoAnalysis:
+        """Extract signals using sliding window chunking for Qwen to avoid losing focus."""
+        self.logger.info(f"Extracting signals from {video_id} using Qwen with Sliding Window (length: {len(transcript)})")
+        start_time = time.time()
+        
+        chunks = self._chunk_transcript(transcript)
+        all_signals = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cost = 0.0
+
+        for i, chunk in enumerate(chunks):
+            self.logger.info(f"Processing chunk {i+1}/{len(chunks)} for {video_id}")
+            try:
+                system_prompt = self._get_system_prompt()
+                user_prompt = self._get_extraction_prompt(chunk)
+                response = self.client.chat.completions.create(
+                    model=self.settings.llm_model or "qwen2.5-14b-instruct",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_model=list[StockSignal],
+                    temperature=self.settings.llm_temperature,
+                    max_tokens=self.settings.llm_max_tokens,
+                )
+                
+                if response:
+                    all_signals.extend(response)
+                    
+                # We can't directly get accurate token count from instructor occasionally, so approximate
+                total_input_tokens += (len(system_prompt) + len(user_prompt)) // 3
+                total_output_tokens += 100
+                
+            except Exception as e:
+                self.logger.warning(f"Chunk {i+1} failed: {e}")
+
+        # Deduplicate signals by stock code
+        deduped = {}
+        for sig in all_signals:
+            if sig.stock_code and sig.stock_code not in deduped:
+                deduped[sig.stock_code] = sig
+            elif sig.stock_name and sig.stock_name not in deduped:
+                deduped[sig.stock_name] = sig
+                
+        final_signals = list(deduped.values())
+        
+        processing_time = time.time() - start_time
+        metrics = CostMetrics(
+            total_cost_usd=total_cost,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+        )
+
+        return VideoAnalysis(
+            video_id=video_id,
+            analyst_name=analyst_name,
+            signals=final_signals,
+            processed_at=datetime.utcnow(),
+            processing_duration_seconds=processing_time,
+            transcript_length_chars=len(transcript),
+            metrics=metrics,
+        )
+
+
 class LLMExtractorFactory:
     """Factory for creating LLM extractors based on settings."""
 
     _extractors = {
         "openai": OpenAIExtractor,
+        "qwen": QwenOpenAIExtractor,
         "anthropic": AnthropicExtractor,
         "gemini": GoogleExtractor,
         "google": GoogleExtractor,

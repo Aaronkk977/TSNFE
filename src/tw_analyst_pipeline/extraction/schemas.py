@@ -52,7 +52,7 @@ def normalize_label(label: Optional[str]) -> str:
 class StockSignal(BaseModel):
     """Single stock signal extracted from analyst video."""
 
-    stock_code: str = Field(..., pattern=r"^\d{4,5}[A-Z]?$", description="Taiwan stock code")
+    stock_code: str = Field(..., pattern=r"^(?:\d{4,5}[A-Z]?|XXXX|UNKNOWN|N/A)?$", description="Taiwan stock code. Leave empty or use XXXX if unknown.")
     stock_name: str = Field(..., description="Stock name or company name")
     action: TradeAction = Field(..., description="Trading action: buy, sell, or hold")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
@@ -110,16 +110,6 @@ class VideoAnalysis(BaseModel):
     processed_at: datetime = Field(default_factory=datetime.utcnow, description="Processing timestamp")
     processing_duration_seconds: Optional[float] = Field(None, description="Pipeline processing time")
     transcript_length_chars: Optional[int] = Field(None, description="Transcript character count")
-    confidence_score: Optional[float] = Field(
-        None, description="Overall confidence 0.0-1.0"
-    )
-    sentiment_score: Optional[float] = Field(None, ge=0.0, le=10.0)
-    urgency: Optional[float] = Field(None, ge=0.0, le=10.0)
-    implied_label: Optional[str] = Field(None, description="Raw overall label")
-    normalized_label: Optional[str] = Field(
-        None,
-        description="Normalized overall label: 買進/中立/賣出/模糊",
-    )
     video_view_count: Optional[int] = Field(None, ge=0)
     video_published_at: Optional[str] = Field(None)
     recommendation_feature: Optional["RecommendationFeature"] = Field(default=None)
@@ -180,7 +170,6 @@ class RecommendationFeature(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     view_count: int = Field(default=0, ge=0)
     recommended_stocks: List[RecommendationStock] = Field(default_factory=list)
-    label: str = Field(default="中立", description="影片整體標籤：買進/中立/賣出")
 
 
 VideoAnalysis.model_rebuild()

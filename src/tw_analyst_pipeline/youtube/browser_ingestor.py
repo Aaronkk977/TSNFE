@@ -1,3 +1,4 @@
+import os
 """
 Browser-based media ingestion for YouTube.
 Uses Playwright to run a real browser session and capture media stream URLs.
@@ -28,7 +29,7 @@ class BrowserMediaIngestor(LoggerMixin):
         return datetime.now().strftime("%Y-%m-%d")
 
     def _dated_output_dir(self) -> Path:
-        return self.output_dir / "daily" / self._current_date_folder()
+        return self.output_dir / os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily") / self._current_date_folder()
 
     def capture(self, video_url: str, video_id: str) -> Path:
         media_urls = self._collect_media_urls(video_url)

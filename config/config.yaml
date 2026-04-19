@@ -33,7 +33,7 @@ execution:
   # audio: 下載音檔後多模態萃取（預設、最穩）
   # url: 直接讀 YouTube 連結（較不穩）
   # text: 先產出逐字稿，再用 LLM 讀文字
-  mode: "audio"
+  mode: "text"
 
   # 僅 mode=text 使用
   # auto: 先快取/CC，失敗再用轉錄

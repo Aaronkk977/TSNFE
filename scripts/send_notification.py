@@ -48,6 +48,7 @@ def fetch_video_title(video_id):
     return None
 
 
+import time
 def _find_latest_daily_summary() -> Path:
     summary_files = sorted(
         Path("data/reports/daily").glob("*/daily_run_summary_*.json"),
@@ -55,8 +56,12 @@ def _find_latest_daily_summary() -> Path:
         reverse=True,
     )
     if not summary_files:
-        raise FileNotFoundError("No daily summary file found under data/reports/daily")
-    return summary_files[0]
+        return None
+    latest = summary_files[0]
+    # 如果這個檔案超過 20 小時未更新，代表今日沒有跑出新報告
+    if time.time() - latest.stat().st_mtime > 20 * 3600:
+        return None
+    return latest
 
 
 def load_signal_fallback(video_id):
@@ -136,6 +141,17 @@ def send_to_discord(message):
 
 def main():
     summary_path = _find_latest_daily_summary()
+    if summary_path is None:
+        error_msg = "⚠️ 每日分析師影片處理異常通知\n本日沒有正確執行 / 無法產生今日新報告，可能是爬蟲錯誤或YouTube API問題，請檢查伺服器！"
+        debug_print("Sending failure notification due to stale/missing reports.")
+        try:
+            send_to_telegram(error_msg)
+        except: pass
+        try:
+            send_to_discord(error_msg)
+        except: pass
+        return
+
     debug_print(f"CWD: {Path.cwd()}")
     debug_print(f"Summary path: {summary_path.resolve()}")
     debug_print(f"Summary exists: {summary_path.exists()}")
@@ -224,6 +240,51 @@ def main():
 
     if len(video_items) > 10:
         msg += f"\n... 後面還有 {max(0, len(video_items) - 10)} 部影片，但因長度而截斷。\n"
+
+    # ---------- 計算今日最多觀看推薦/不推薦前三名 ----------
+    buy_scores = {}
+    sell_scores = {}
+    # We know the date from summary_path (e.g. data/reports/daily/2026-04-18)
+    date_str = summary_path.parent.name
+    signals_dir = Path("data/signals/daily") / date_str
+    if signals_dir.exists():
+        from collections import defaultdict
+        for sf in signals_dir.glob("*.json"):
+            try:
+                with open(sf, "r", encoding="utf-8") as file_sf:
+                    payload = json.load(file_sf)
+                    view_c = to_int_or_default(payload.get("video_view_count"), 0)
+                    for sig in payload.get("signals", []):
+                        lbl = sig.get("normalized_label") or sig.get("implied_label")
+                        stk = sig.get("stock_name")
+                        stk_code = sig.get("stock_code", "")
+                        if stk:
+                            stk_display = f"{stk_code} {stk}".strip()
+                            if lbl == "買進":
+                                buy_scores[stk_display] = buy_scores.get(stk_display, 0) + view_c
+                            elif lbl == "賣出" or lbl == "不推薦":
+                                sell_scores[stk_display] = sell_scores.get(stk_display, 0) + view_c
+            except Exception:
+                pass
+        
+        top_buy = sorted(buy_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+        top_sell = sorted(sell_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+        
+        msg += "\n\n📊 今日影片觀看數總計最高標的："
+        if top_buy:
+            msg += "\n🟢 推薦買進前三名："
+            for s, v in top_buy:
+                msg += f"\n - {s} (觀看熱度: {v})"
+        else:
+            msg += "\n🟢 推薦買進無資料"
+            
+        if top_sell:
+            msg += "\n🔴 不推薦/賣出前三名："
+            for s, v in top_sell:
+                msg += f"\n - {s} (觀看熱度: {v})"
+        else:
+            msg += "\n🔴 賣出無資料"
+    # -----------------------------------------------------
 
     debug_print(f"Message preview: {msg[:500]}")
 

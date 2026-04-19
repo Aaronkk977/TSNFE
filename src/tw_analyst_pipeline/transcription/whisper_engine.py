@@ -1,3 +1,4 @@
+import os
 """
 Whisper transcription engine using faster-whisper
 Converts audio to text with GPU acceleration
@@ -24,15 +25,27 @@ class WhisperTranscriber(LoggerMixin):
         self.model = self._load_model()
 
     @staticmethod
-    def _current_date_folder() -> str:
+    def _current_date_folder(published_at: str = None) -> str:
+        if published_at:
+            try:
+                from datetime import timezone, timedelta, datetime
+                if isinstance(published_at, datetime):
+                    dt = published_at
+                else:
+                    dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                tz_taipei = timezone(timedelta(hours=8))
+                return dt.astimezone(tz_taipei).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d")
 
-    def _dated_output_dir(self) -> Path:
-        return self.output_dir / "daily" / self._current_date_folder()
+    def _dated_output_dir(self, published_at: str = None) -> Path:
+        return self.output_dir / os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily") / self._current_date_folder(published_at)
 
     def _find_latest_transcript_file(self, video_id: str) -> Optional[Path]:
         candidates = sorted(
-            self.output_dir.glob(f"daily/*/{video_id}_*.json"),
+            self.output_dir.glob(f"{os.environ.get('PIPELINE_OUTPUT_SUBFOLDER', 'daily')}/*/{video_id}_*.json"),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
@@ -52,7 +65,7 @@ class WhisperTranscriber(LoggerMixin):
         self.logger.info(f"Whisper model loaded on {self.settings.whisper_device}")
         return model
 
-    def transcribe(self, audio_path: Path, video_id: Optional[str] = None) -> TranscriptResult:
+    def transcribe(self, audio_path: Path, video_id: Optional[str] = None, published_at: Optional[str] = None) -> TranscriptResult:
         """
         Transcribe audio file to text.
 
@@ -130,7 +143,7 @@ class WhisperTranscriber(LoggerMixin):
             )
 
             # Save to cache
-            self._save_transcript(result)
+            self._save_transcript(result, published_at=published_at)
 
             return result
 
@@ -138,9 +151,9 @@ class WhisperTranscriber(LoggerMixin):
             self.logger.error(f"Transcription failed for {video_id}: {str(e)}")
             raise
 
-    def _save_transcript(self, result: TranscriptResult) -> Path:
+    def _save_transcript(self, result: TranscriptResult, published_at: Optional[str] = None) -> Path:
         """Save transcript to JSON file."""
-        output_dir = self._dated_output_dir()
+        output_dir = self._dated_output_dir(published_at)
         output_file = output_dir / f"{result.video_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
 
         try:

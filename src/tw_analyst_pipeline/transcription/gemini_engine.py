@@ -1,3 +1,4 @@
+import os
 """
 Gemini transcription engine.
 Converts audio to transcript using Gemini 2.5 Flash.
@@ -32,21 +33,33 @@ class GeminiTranscriber(LoggerMixin):
         self.logger.info(f"Gemini transcriber initialized: {self.model_name}")
 
     @staticmethod
-    def _current_date_folder() -> str:
+    def _current_date_folder(published_at: str = None) -> str:
+        if published_at:
+            try:
+                from datetime import timezone, timedelta, datetime
+                if isinstance(published_at, datetime):
+                    dt = published_at
+                else:
+                    dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                tz_taipei = timezone(timedelta(hours=8))
+                return dt.astimezone(tz_taipei).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d")
 
-    def _dated_output_dir(self) -> Path:
-        return self.output_dir / "daily" / self._current_date_folder()
+    def _dated_output_dir(self, published_at: str = None) -> Path:
+        return self.output_dir / os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily") / self._current_date_folder(published_at)
 
     def _find_latest_transcript_file(self, video_id: str) -> Optional[Path]:
         candidates = sorted(
-            self.output_dir.glob(f"daily/*/{video_id}_*.json"),
+            self.output_dir.glob(f"{os.environ.get('PIPELINE_OUTPUT_SUBFOLDER', 'daily')}/*/{video_id}_*.json"),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
         return candidates[0] if candidates else None
 
-    def transcribe(self, audio_path: Path, video_id: Optional[str] = None) -> TranscriptResult:
+    def transcribe(self, audio_path: Path, video_id: Optional[str] = None, published_at: Optional[str] = None) -> TranscriptResult:
         audio_path = Path(audio_path)
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
@@ -87,7 +100,7 @@ class GeminiTranscriber(LoggerMixin):
                 processing_time_seconds=processing_time,
             )
 
-            self._save_transcript(result)
+            self._save_transcript(result, published_at=published_at)
             self.logger.info(
                 f"Gemini transcription completed in {processing_time:.1f}s "
                 f"({len(transcript_text)} chars)"
@@ -105,7 +118,7 @@ class GeminiTranscriber(LoggerMixin):
                 except Exception:
                     pass
 
-    def try_fast_track(self, video_id: str) -> Optional[TranscriptResult]:
+    def try_fast_track(self, video_id: str, published_at: Optional[str] = None) -> Optional[TranscriptResult]:
         """Fast-track: cache -> YouTube CC subtitle API. Return None on failure."""
         if not video_id:
             return None
@@ -184,7 +197,7 @@ class GeminiTranscriber(LoggerMixin):
                 duration_seconds=(segments[-1]["end"] if segments and segments[-1]["end"] else None),
                 processing_time_seconds=time.time() - start_time,
             )
-            self._save_transcript(result)
+            self._save_transcript(result, published_at=published_at)
             self.logger.info(
                 f"Fast-track transcript success: {video_id} "
                 f"({len(full_text)} chars, {len(segments)} segments)"
@@ -207,8 +220,8 @@ class GeminiTranscriber(LoggerMixin):
                 return cookie_path
         return None
 
-    def _save_transcript(self, result: TranscriptResult) -> Path:
-        output_dir = self._dated_output_dir()
+    def _save_transcript(self, result: TranscriptResult, published_at: Optional[str] = None) -> Path:
+        output_dir = self._dated_output_dir(published_at)
         output_file = output_dir / f"{result.video_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
         try:
             output_dir.mkdir(parents=True, exist_ok=True)

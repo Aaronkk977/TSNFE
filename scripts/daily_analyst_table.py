@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """
 Daily automation script:
@@ -90,7 +91,7 @@ def _sleep_before_next_video(processed_videos: int) -> None:
     if processed_videos <= 0:
         return
 
-    delay_seconds = random.uniform(50, 70)
+    delay_seconds = random.uniform(15, 30)
     print(f"[INFO] Sleeping {delay_seconds:.1f}s before next video")
     time.sleep(delay_seconds)
 
@@ -323,22 +324,38 @@ def main() -> int:
     processed_video_total = 0
     updated_video_total = 0
 
+    def get_previous_trading_day(dt):
+        prev = dt - timedelta(days=1)
+        while prev.weekday() >= 5: # 5=Sat, 6=Sun
+            prev -= timedelta(days=1)
+        return prev
+
     tz_taipei = timezone(timedelta(hours=8))
     
     if args.target_date:
         target_dt = datetime.strptime(args.target_date, "%Y-%m-%d").replace(tzinfo=tz_taipei)
-        window_start_dt = target_dt
-        window_end_dt = target_dt + timedelta(days=1)
-        # Using exact start and end times for fetcher
+        
+        # 開盤前到上個交易日的開盤 (09:00 to 09:00)
+        window_end_dt = target_dt.replace(hour=9, minute=0, second=0, microsecond=0)
+        prev_td = get_previous_trading_day(window_end_dt)
+        window_start_dt = prev_td.replace(hour=9, minute=0, second=0, microsecond=0)
+        
         days_back_param = None
         published_after_dt = window_start_dt
         published_before_dt = window_end_dt
     else:
-        window_end_dt = datetime.now(tz_taipei)
-        window_start_dt = window_end_dt - timedelta(days=args.days_back)
-        days_back_param = args.days_back
-        published_after_dt = None
-        published_before_dt = None
+        now_dt = datetime.now(tz_taipei)
+        target_dt = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        if now_dt.hour >= 9:
+             target_dt += timedelta(days=1)
+        
+        window_end_dt = target_dt.replace(hour=9, minute=0, second=0, microsecond=0)
+        prev_td = get_previous_trading_day(window_end_dt)
+        window_start_dt = prev_td.replace(hour=9, minute=0, second=0, microsecond=0)
+        
+        days_back_param = None
+        published_after_dt = window_start_dt
+        published_before_dt = window_end_dt
 
     for item in analysts:
         if processed_video_total >= max(1, args.max_videos):
@@ -449,7 +466,7 @@ def main() -> int:
     else:
         folder_date_str = completed_at_dt.strftime("%Y-%m-%d")
         
-    date_folder = settings.data_reports_dir / "daily" / folder_date_str
+    date_folder = settings.data_reports_dir / os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily") / folder_date_str
     date_folder.mkdir(parents=True, exist_ok=True)
     timestamp_tag = completed_at_dt.strftime("%Y%m%d_%H%M%S")
 
@@ -487,7 +504,7 @@ def main() -> int:
     print(f"[INFO] Dated summary: {dated_summary_file}")
 
     try:
-        import os
+
 
         summary_path = os.getenv("GITHUB_STEP_SUMMARY", "").strip()
         if summary_path:

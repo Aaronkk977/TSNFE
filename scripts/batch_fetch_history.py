@@ -4,11 +4,13 @@ from datetime import datetime, timedelta
 import sys
 
 def main():
+    import os
+    os.environ["PIPELINE_OUTPUT_SUBFOLDER"] = "history"
     parser = argparse.ArgumentParser(description="Batch fetch historical analyst videos by generating daily reports for a date range.")
     parser.add_argument('--start-date', type=str, required=True, help="Start date YYYY-MM-DD")
     parser.add_argument('--end-date', type=str, required=True, help="End date YYYY-MM-DD")
-    parser.add_argument("--max-videos", type=int, default=50, help="Max videos per day to process")
-    parser.add_argument("--max-videos-per-analyst", type=int, default=50, help="Max videos per analyst per day")
+    parser.add_argument("--max-videos", type=int, default=10, help="Max videos per day to process")
+    parser.add_argument("--max-videos-per-analyst", type=int, default=5, help="Max videos per analyst per day")
     parser.add_argument('--keep-audio', action='store_true', help="Keep audio file after processing (default is to delete them)")
     args = parser.parse_args()
     
@@ -28,7 +30,7 @@ def main():
         print(f"\n{'='*50}\nProcessing for target date: {target_date_str}\n{'='*50}")
         
         cmd = [
-            "python", "scripts/daily_analyst_table.py",
+            sys.executable, "scripts/daily_analyst_table.py",
             "--target-date", target_date_str,
             "--max-videos", str(args.max_videos),
             "--max-videos-per-analyst", str(args.max_videos_per_analyst)
@@ -46,7 +48,7 @@ def main():
         current_date += timedelta(days=1)
     
     print("\n--- ML Pipeline Execution Steps ---")
-    print("1. All daily reports have been placed into data/reports/daily/")
+    print("1. All historical reports have been placed into data/reports/history/")
     print("2. Run 'python scripts/build_dataset.py --days 5' to generate ML dataset")
     print("3. Run 'python scripts/train_eval_models.py --days 5' to view evaluation metrics")
 

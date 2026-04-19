@@ -1,39 +1,11 @@
 analysts:
 - channel: '@s178'
   name: 郭哲榮分析師-摩爾證券投顧
-- channel: '@win16888'
-  name: 林鈺凱分析師-摩爾證券投顧
-- channel: '@gd1788'
-  name: 何基鼎分析師-摩爾證券投顧
-- channel: '@jds16888'
-  name: 台股攻略 劉烱德
-- channel: '@daren888'
-  name: 陳昆仁分析師-摩爾證券投顧
 - channel: '@WE178'
   name: 鐘崑禎分析師_摩爾證券投顧
 - channel: '@gp52000'
   name: 謝晨彥分析師-摩爾證券投顧
-- channel: '@imoney168'
-  name: 新台股龍捲風 徐照興分析師-永誠國際投顧
-- channel: '@%E9%99%B3%E6%99%BA%E9%9C%96%E5%88%86%E6%9E%90%E5%B8%AB'
-  name: 陳智霖股票分析師 Equity Research Analyst
-- channel: '@m168'
-  name: 張貽程分析師-摩爾證券投顧-外資超錢線
-- channel: '@richrich948'
-  name: 楊育華分析師-摩爾證券投顧
-- channel: '@ps1788'
-  name: 林漢偉分析師-摩爾證券投顧
-- channel: '@%E9%99%B3%E4%BF%8A%E8%A8%80%E9%A3%86%E8%82%A1%E6%8E%A7%E7%9B%A4%E8%A1%93'
-  name: 陳俊言分析師-摩爾證券投顧
 - channel: '@%E5%BC%B5%E5%AE%87%E6%98%8E%E5%88%86%E6%9E%90%E5%B8%AB'
   name: 張宇明分析師
-- channel: '@winner178'
-  name: 股市期皇后-莊佳螢
-- channel: '@ccstock888'
-  name: 陳威良 股市全威 (考股學家)
-- channel: '@bluemoney168'
-  name: 金融鬼谷子 藍登耀分析師-永誠國際投顧
-- channel: '@%E6%9D%8E%E8%9C%80%E8%8A%B3%E8%82%A1%E5%B8%82%E5%85%A8%E8%8A%B3%E4%BD%8D'
-  name: 股市全芳位 李蜀芳分析師-永誠國際投顧
-- channel: '@%E8%B6%85%E8%B6%8A%E5%B7%94%E5%B3%B0%E6%B6%82%E6%95%8F%E5%B3%B0%E5%88%86%E6%9E%90%E5%B8%AB'
-  name: 超越巔峰 涂敏峰分析師-永誠國際投顧
+- channel: '@daren888'
+  name: 陳昆仁分析師-摩爾證券投顧

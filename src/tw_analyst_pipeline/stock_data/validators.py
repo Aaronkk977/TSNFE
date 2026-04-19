@@ -182,6 +182,9 @@ class StockValidator(LoggerMixin):
         provider = (self.settings.stock_validation_provider or "local").lower()
 
         if provider != "fugle":
+            # Allow ETF patterns (usually starting with 00) to pass validation
+            if code.startswith("00") and re.match(r"^\d{4,5}[A-Z]?$", code):
+                return True
             return local_valid
 
         if not self.settings.fugle_api_key:
@@ -249,23 +252,26 @@ class StockValidator(LoggerMixin):
 
         for signal in signals:
             # Try to resolve stock code
-            if not self.validate_stock_code(signal.stock_code):
+            resolved_code = self.resolve_stock_code(signal.stock_code)
+            if not resolved_code:
+                resolved_code = self.resolve_stock_code(signal.stock_name)
+
+            if resolved_code and self.validate_stock_code(resolved_code):
+                signal.stock_code = resolved_code
+                signal.validated = True
+                signal.validation_source = (
+                    self.settings.stock_validation_provider or "local"
+                )
+                valid_signals.append(signal)
+            else:
                 self.logger.warning(
-                    f"Invalid stock code: {signal.stock_code} ({signal.stock_name})"
+                    f"Invalid or unresolvable stock: code='{signal.stock_code}' name='{signal.stock_name}'"
                 )
                 signal.validated = False
                 signal.validation_source = (
                     self.settings.stock_validation_provider or "local"
                 )
                 dropped_count += 1
-                continue
-
-            signal.validated = True
-            signal.validation_source = (
-                self.settings.stock_validation_provider or "local"
-            )
-
-            valid_signals.append(signal)
 
         if dropped_count:
             self.logger.info("Dropped %s invalid signals during validation", dropped_count)

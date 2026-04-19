@@ -1,3 +1,4 @@
+import os
 """
 YouTube video audio download module using yt-dlp
 Handles downloading audio from YouTube videos with error handling and retry logic
@@ -24,23 +25,33 @@ class AudioDownloader(LoggerMixin):
         self.failed_downloads_log = settings.data_errors_dir / "failed_downloads.json"
 
     @staticmethod
-    def _current_date_folder() -> str:
+    def _current_date_folder(published_at: str = None) -> str:
+        if published_at:
+            try:
+                from datetime import timezone, timedelta, datetime
+                # Parse ISO format, accounting for Z
+                dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                tz_taipei = timezone(timedelta(hours=8))
+                return dt.astimezone(tz_taipei).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d")
 
-    def _dated_output_dir(self) -> Path:
-        return self.output_dir / "daily" / self._current_date_folder()
+    def _dated_output_dir(self, published_at: str = None) -> Path:
+        return self.output_dir / os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily") / self._current_date_folder(published_at)
 
     def _find_latest_audio_file(self, video_id: str) -> Optional[Path]:
         candidates = sorted(
-            self.output_dir.glob(f"daily/*/{video_id}_*.wav"),
+            self.output_dir.glob(f"{os.environ.get('PIPELINE_OUTPUT_SUBFOLDER', 'daily')}/*/{video_id}_*.wav"),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
         return candidates[0] if candidates else None
 
-    def _get_ydl_opts(self) -> dict:
+    def _get_ydl_opts(self, published_at: str = None) -> dict:
         """Get yt-dlp options for audio extraction."""
-        output_dir = self._dated_output_dir()
+        output_dir = self._dated_output_dir(published_at)
         opts = {
             # Format selection
             "format": "bestaudio/best",
@@ -105,7 +116,7 @@ class AudioDownloader(LoggerMixin):
         return "requested format is not available" in message
 
     @retry_with_backoff(max_attempts=3, exceptions=(Exception,))
-    def download(self, video_url: str) -> Optional[Path]:
+    def download(self, video_url: str, published_at: str = None) -> Optional[Path]:
         """
         Download audio from YouTube video.
 
@@ -131,7 +142,7 @@ class AudioDownloader(LoggerMixin):
         video_id = self._extract_video_id(video_url)
         self.logger.info(f"Downloading audio from video: {video_id}")
 
-        ydl_opts = self._get_ydl_opts()
+        ydl_opts = self._get_ydl_opts(published_at)
         format_fallbacks = [
             "bestaudio/best",
             "best",
@@ -192,7 +203,7 @@ class AudioDownloader(LoggerMixin):
         """Extract video ID from URL."""
         # Use yt-dlp's built-in ID extraction
         try:
-            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "no_warnings": True, "no_warnings": True}) as ydl:
                 info = ydl.extract_info(video_url, download=False)
                 return info.get("id", video_url)
         except Exception:
@@ -238,7 +249,7 @@ class AudioDownloader(LoggerMixin):
         current_time = time.time()
         max_age_seconds = max_age_days * 24 * 3600
 
-        for file_path in self.output_dir.glob("daily/**/*.wav"):
+        for file_path in self.output_dir.glob(f"{os.environ.get('PIPELINE_OUTPUT_SUBFOLDER', 'daily')}/**/*.wav"):
             if file_path.is_file():
                 file_age = current_time - file_path.stat().st_mtime
                 if file_age > max_age_seconds:

@@ -142,7 +142,7 @@ class SignalPipeline(LoggerMixin):
                         self.logger.info(f"Using existing local audio: {audio_path}")
                     else:
                         self._sleep_between_download_requests()
-                        audio_path = self.downloader.download(video_url)
+                        audio_path = self.downloader.download(video_url, published_at=published_at)
                         if not audio_path:
                             raise RuntimeError("Failed to download audio")
 
@@ -158,7 +158,7 @@ class SignalPipeline(LoggerMixin):
                     should_try_cc = text_transcript_source in {"auto", "cc"}
                     if should_try_cc and hasattr(self.transcriber, "try_fast_track"):
                         self.logger.info("Stage 1: Fast-track transcript (cache/YouTube CC)")
-                        transcript_result = self.transcriber.try_fast_track(video_id)
+                        transcript_result = self.transcriber.try_fast_track(video_id, published_at=published_at)
 
                     # Stage 2: Audio pipeline fallback
                     should_transcribe = text_transcript_source in {"auto", "gemini"}
@@ -172,19 +172,19 @@ class SignalPipeline(LoggerMixin):
                             self.logger.info(f"Using existing local audio: {audio_path}")
                         else:
                             self._sleep_between_download_requests()
-                            audio_path = self.downloader.download(video_url)
+                            audio_path = self.downloader.download(video_url, published_at=published_at)
                             if not audio_path:
                                 raise RuntimeError("Failed to download audio")
 
                         self.logger.info("Stage 3: Transcribing audio")
                         try:
-                            transcript_result = self.transcriber.transcribe(audio_path, video_id)
+                            transcript_result = self.transcriber.transcribe(audio_path, video_id, published_at=published_at)
                         except Exception as e:
                             self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
                             if text_transcript_source == "auto":
                                 if self.fallback_transcriber is None:
                                     self.fallback_transcriber = WhisperTranscriber(self.settings)
-                                transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id)
+                                transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id, published_at=published_at)
                     if not transcript_result or not transcript_result.text:
                         raise RuntimeError("Failed to transcribe audio")
 
@@ -212,7 +212,6 @@ class SignalPipeline(LoggerMixin):
                     normalize_label(sig.normalized_label or sig.implied_label)
                     for sig in analysis.signals
                 ]
-                analysis.normalized_label = self._majority_label(labels)
                 analysis.recommendation_feature = self._build_recommendation_feature(analysis)
 
                 # Stage 6: Save results
@@ -268,7 +267,7 @@ class SignalPipeline(LoggerMixin):
 
     def _sleep_between_download_requests(self) -> None:
         if self._has_requested_download:
-            delay_seconds = random.uniform(15, 45)
+            delay_seconds = random.uniform(15, 25)
             self.logger.info(
                 f"Sleeping {delay_seconds:.1f}s before next download request"
             )
@@ -277,7 +276,17 @@ class SignalPipeline(LoggerMixin):
 
     def _save_analysis(self, analysis: VideoAnalysis) -> Path:
         """Save analysis result to JSON file."""
-        output_dir = self.settings.data_signals_dir / "daily" / analysis.processed_at.strftime("%Y-%m-%d")
+        from datetime import timezone, timedelta, datetime
+        folder_date = analysis.processed_at
+        if analysis.video_published_at:
+            try:
+                dt = datetime.fromisoformat(analysis.video_published_at.replace("Z", "+00:00"))
+                tz_taipei = timezone(timedelta(hours=8))
+                folder_date = dt.astimezone(tz_taipei)
+            except Exception:
+                pass
+            
+        output_dir = self.settings.data_signals_dir / os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily") / folder_date.strftime("%Y-%m-%d")
         output_file = output_dir / f"{analysis.video_id}_{analysis.processed_at.strftime('%Y%m%d_%H%M%S')}.json"
 
         try:
@@ -291,12 +300,7 @@ class SignalPipeline(LoggerMixin):
                 "market_outlook": analysis.market_outlook,
                 "processing_duration_seconds": analysis.processing_duration_seconds,
                 "transcript_length_chars": analysis.transcript_length_chars,
-                "confidence_score": analysis.confidence_score,
-                "sentiment_score": analysis.sentiment_score,
-                "urgency": analysis.urgency,
-                "implied_label": analysis.implied_label,
-                "normalized_label": analysis.normalized_label,
-                "video_view_count": analysis.video_view_count,
+                                    "video_view_count": analysis.video_view_count,
                 "video_published_at": analysis.video_published_at,
                 "recommendation_feature": (
                     analysis.recommendation_feature.model_dump(mode="json", exclude_none=True)
@@ -370,7 +374,6 @@ class SignalPipeline(LoggerMixin):
             timestamp=analysis.processed_at,
             view_count=analysis.video_view_count or 0,
             recommended_stocks=recommended,
-            label=analysis.normalized_label or "中立",
         )
 
     def _filter_ambiguous_signals(self, signals):
@@ -410,7 +413,6 @@ class SignalPipeline(LoggerMixin):
             "timestamp": feature.timestamp.isoformat(),
             "view_count": feature.view_count,
             "recommended_stocks": [stock.model_dump() for stock in feature.recommended_stocks],
-            "label": feature.label,
         }
 
         existing = [entry for entry in existing if entry.get("video_id") != analysis.video_id]
