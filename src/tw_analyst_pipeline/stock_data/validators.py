@@ -328,10 +328,21 @@ class StockValidator(LoggerMixin):
         dropped_count = 0
 
         for signal in signals:
-            # Try to resolve stock code
-            resolved_code = self.resolve_stock_code(signal.stock_code)
-            if not resolved_code:
-                resolved_code = self.resolve_stock_code(signal.stock_name)
+            # Try to resolve stock code from name first, as names from transcript are more reliable
+            resolved_from_name = self.resolve_stock_code(signal.stock_name)
+            resolved_from_code = self.resolve_stock_code(signal.stock_code)
+            
+            resolved_code = None
+            if resolved_from_name and resolved_from_code:
+                if resolved_from_name != resolved_from_code:
+                    self.logger.info(
+                        f"Correcting LLM hallucinated code for '{signal.stock_name}': {resolved_from_code} -> {resolved_from_name}"
+                    )
+                resolved_code = resolved_from_name
+            elif resolved_from_name:
+                resolved_code = resolved_from_name
+            elif resolved_from_code:
+                resolved_code = resolved_from_code
 
             if resolved_code and self.validate_stock_code(resolved_code):
                 signal.stock_code = resolved_code
