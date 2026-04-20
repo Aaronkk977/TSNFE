@@ -152,6 +152,24 @@ TSNFE/
 - 若曾提交敏感資訊，請立即 rotate key / cookie。
 - `.gitignore` 已忽略 runtime 輸出與 `local/cookies.txt`。
 
+## 最新功能新增
+
+- **本地端開源大模型支援 (Local vLLM Integration)**：現已支援切換至本地端 OpenAI-compatible API（設定 `provider: qwen` 呼叫本地 vLLM API，如 `Qwen-2.5-14B-Instruct-AWQ`），大幅降低長影音大流量分析的 API 成本，同時藉由 `instructor` 嚴格約束 JSON 工具取值。
+- **長文本滑動視窗切塊 (Sliding Window Chunking)**：針對長達數萬字的逐字稿，支援以 2,500 字為單位（預設 250 字重疊）切分輸入，有效避免突破 LLM 的 Token 長度上限，同時減少模型尾部注意力渙散造成的抓取遺漏。
+- **訊號合併與智慧衝突處理 (Signal Deduplication & Conflict Resolution)**：
+  - 各切塊單元的分析結果會根據同檔股票自動 Deduplicate 合併。
+  - **行動權重設計**：強烈明確操作 (`buy`/`sell`) 的權重自動覆蓋較保守的訊號 (`hold`)。
+  - **自動廢除矛盾觀點**：若一檔股票在同一影片的各文字塊中同時被抽出 `buy` 和 `sell` 訊號，系統會將其判定為矛盾而直接拋棄 (Drop)。
+  - **邏輯結集**：抽取出的標的推薦原因 (`reasoning`) 自動進行 `|` 拼接，還原最全面的評斷軌跡。
+
+## report.csv 說明
+
+系統透過每日腳本（如 `daily_analyst_table.py` 或 `build_table_from_signals.py`）所產出的報表會以 CSV 格式（如 `data/reports/daily/YYYY-MM-DD/analyst_stock_matrix...csv`，統稱 `report.csv`）產出，這份檔案有以下特點：
+
+- **矩陣化資料結構**：將龐大而零碎的每日訊號 JSON，聚合成以「日期與分析師」或「股票代碼」為欄位的觀測特徵，讓你一目了然看清每日多空方向與市場共識。
+- **量化模型特徵準備**：內建標準化的 DataFrame 格式，預先清洗好的台股分類標籤（買進/賣出/中立），能作為回測系統、資金控管系統或機器學習模型的直接 input 特徵。
+- **結合聲量熱度**：依據部分設定與 metadata，報表可結合 YouTube 分析頻道的觀看數排序或點擊流作為聲量指標，賦予了台股基本面與籌碼面之外的「散戶情緒指標」。
+
 ## 延伸文件
 
 - `QUICKSTART.md`：快速上手

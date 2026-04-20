@@ -1272,8 +1272,8 @@ class QwenOpenAIExtractor(OpenAIExtractor):
         )
         self.logger.info("Local Qwen vLLM OpenAI client initialized via http://0.0.0.0:8000/v1")
 
-    def _chunk_transcript(self, transcript: str, chunk_size: int = 2000, overlap: int = 200) -> list:
-        """Split transcript into chunks approx 2500 chars long with overlap."""
+    def _chunk_transcript(self, transcript: str, chunk_size: int = 2500, overlap: int = 200) -> list:
+        """Split transcript into chunks approx 2000 chars long with overlap."""
         if len(transcript) <= chunk_size:
             return [transcript]
         chunks = []
