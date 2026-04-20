@@ -7,7 +7,9 @@ import json
 import os
 import time
 import re
+from datetime import datetime
 from typing import List, Optional, Type, Union
+
 
 import instructor
 from anthropic import Anthropic
@@ -570,7 +572,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 signals_data=signals_data,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                processing_time=time.time() - start_time,
+                processing_time_seconds=time.time() - start_time,
                 transcript_length_chars=len(transcript),
             )
 
@@ -740,7 +742,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 signals_data=signals_data,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                processing_time=time.time() - start_time,
+                processing_time_seconds=time.time() - start_time,
                 transcript_length_chars=None,
             )
 
@@ -817,7 +819,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 signals_data=signals_data,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                processing_time=time.time() - start_time,
+                processing_time_seconds=time.time() - start_time,
                 transcript_length_chars=None,
             )
 
@@ -1256,8 +1258,22 @@ class GoogleExtractor(BaseLLMExtractor):
 class QwenOpenAIExtractor(OpenAIExtractor):
     """Extractor for Qwen2.5-14B-Instruct via OpenAI compatible API with sliding window chunking."""
 
-    def _chunk_transcript(self, transcript: str, chunk_size: int = 15000, overlap: int = 2000) -> list:
-        """Split transcript into chunks approx 20-mins long with overlap."""
+    def __init__(
+        self,
+        settings: Settings,
+        pipeline_config: PipelineConfig,
+    ):
+        # Initializing manually since we might not have openai_api_key set and want to use local vLLM
+        BaseLLMExtractor.__init__(self, settings, pipeline_config)
+        import instructor
+        from openai import OpenAI
+        self.client = instructor.from_openai(
+            OpenAI(base_url="http://0.0.0.0:8000/v1", api_key="empty")
+        )
+        self.logger.info("Local Qwen vLLM OpenAI client initialized via http://0.0.0.0:8000/v1")
+
+    def _chunk_transcript(self, transcript: str, chunk_size: int = 2000, overlap: int = 200) -> list:
+        """Split transcript into chunks approx 2500 chars long with overlap."""
         if len(transcript) <= chunk_size:
             return [transcript]
         chunks = []
@@ -1291,8 +1307,10 @@ class QwenOpenAIExtractor(OpenAIExtractor):
             try:
                 system_prompt = self._get_system_prompt()
                 user_prompt = self._get_extraction_prompt(chunk)
+                model_name = self.config.get("extraction.models", {}).get("qwen", "Qwen/Qwen2.5-14B-Instruct-AWQ")
+                
                 response = self.client.chat.completions.create(
-                    model=self.settings.llm_model or "qwen2.5-14b-instruct",
+                    model=model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
@@ -1312,19 +1330,50 @@ class QwenOpenAIExtractor(OpenAIExtractor):
             except Exception as e:
                 self.logger.warning(f"Chunk {i+1} failed: {e}")
 
-        # Deduplicate signals by stock code
-        deduped = {}
+        # Deduplicate signals by stock code and resolve conflicts
+        grouped_signals = {}
         for sig in all_signals:
-            if sig.stock_code and sig.stock_code not in deduped:
-                deduped[sig.stock_code] = sig
-            elif sig.stock_name and sig.stock_name not in deduped:
-                deduped[sig.stock_name] = sig
+            key = sig.stock_code if sig.stock_code else sig.stock_name
+            if not key:
+                continue
+            if key not in grouped_signals:
+                grouped_signals[key] = []
+            grouped_signals[key].append(sig)
+            
+        final_signals = []
+        for key, sigs in grouped_signals.items():
+            if len(sigs) == 1:
+                final_signals.append(sigs[0])
+                continue
                 
-        final_signals = list(deduped.values())
+            actions = [s.action.lower() for s in sigs if s.action]
+            has_buy = "buy" in actions
+            has_sell = "sell" in actions
+            
+            if has_buy and has_sell:
+                self.logger.info(f"Dropping signal for {key} due to conflicting actions (buy vs sell)")
+                continue
+                
+            # Prefer buy/sell over hold
+            selected_sig = None
+            if has_buy:
+                selected_sig = next((s for s in sigs if s.action.lower() == "buy"), sigs[0])
+            elif has_sell:
+                selected_sig = next((s for s in sigs if s.action.lower() == "sell"), sigs[0])
+            else:
+                selected_sig = sigs[0]
+                
+            # Combine reasons
+            reasons = list(set(s.reasoning for s in sigs if s.reasoning))
+            if reasons:
+                selected_sig.reasoning = " | ".join(reasons)
+                
+            final_signals.append(selected_sig)
         
         processing_time = time.time() - start_time
         metrics = CostMetrics(
-            total_cost_usd=total_cost,
+            video_id=video_id,
+            estimated_usd=total_cost,
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
         )

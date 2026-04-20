@@ -86,7 +86,7 @@ TSNFE/
 - `python scripts/process_with_gemini_web.py <url>`：走 Gemini Web/CDP 流程
 - `python scripts/daily_analyst_table.py`：產生「分析師 × 股票」日報表
 - `python scripts/build_table_from_signals.py --days-back 1`：只用現有 signal JSON 重新生表
-- `pytest`：跑測試
+
 
 ## 設定檔
 

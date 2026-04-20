@@ -3,9 +3,7 @@ import csv
 import os
 import logging
 import re
-from io import StringIO
-
-import pandas as pd
+from html import unescape
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -81,27 +79,43 @@ def fetch_twse_etf_etn_list():
     try:
         response = requests.get(TWSE_ISIN_URL, timeout=30)
         response.raise_for_status()
-        # TWSE ISIN page is typically big5-based. Fall back to apparent encoding.
-        response.encoding = response.apparent_encoding or "big5"
+        # TWSE ISIN page is big5-based.
+        response.encoding = "big5"
 
-        tables = pd.read_html(StringIO(response.text), flavor="lxml")
-        if not tables:
-            return {}
+        html = response.text
 
-        df = tables[0]
-        if df.empty or df.shape[1] == 0:
+        def clean_text(raw: str) -> str:
+            text = re.sub(r"<[^>]+>", " ", raw)
+            text = unescape(text)
+            text = text.replace("\u3000", " ")
+            text = re.sub(r"\s+", " ", text).strip()
+            return text
+
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.IGNORECASE | re.DOTALL)
+        if not rows:
             return {}
 
         etf_like = {}
         current_section = ""
 
-        for raw_value in df.iloc[:, 0].tolist():
-            value = str(raw_value or "").replace("\u3000", " ").strip()
-            if not value or value.lower() == "nan":
+        for row_html in rows:
+            cells = re.findall(r"<td[^>]*>(.*?)</td>", row_html, flags=re.IGNORECASE | re.DOTALL)
+            if not cells:
                 continue
 
-            # Section titles in this table include strings like
-            # "受益證券-ETF" / "受益證券-ETN" / "...槓桿/反向...".
+            # Section titles are often single-cell rows.
+            if len(cells) == 1:
+                value = clean_text(cells[0])
+                if "ETF" in value or "ETN" in value:
+                    current_section = value
+                elif value:
+                    current_section = ""
+                continue
+
+            value = clean_text(cells[0])
+            if not value:
+                continue
+
             if "ETF" in value or "ETN" in value:
                 current_section = value
                 continue
