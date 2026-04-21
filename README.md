@@ -1,21 +1,25 @@
 # Taiwan Analyst Signal Pipeline
 
-台股投顧影片訊號擷取流程：從 YouTube 影片自動擷取買賣訊號，並產出可用於回測/特徵工程的結構化 JSON。
+- 台股投顧影片訊號擷取流程：從 YouTube 影片自動擷取買賣訊號，並產出可用於回測/特徵工程的結構化 JSON。
+- 驗證訊號：利用統計與簡單模型分析訊號預測力 （待辦）
 
 ## 功能重點
 
 - 每天追蹤分析師Youtube頻道更新影片即時抓取
-- 自動下載或直接讀取 YouTube 影片進行多模態萃取
-- 使用 Gemini 可支援文字、音檔和連結多種消息來源
+- 將影音檔轉錄成文字檔，交給LLM擷取分析師推薦與不推薦訊號
 - 股票代碼驗證（Fugle / local）
 - 產出單檔訊號 + recommendation 清單
-- raw / transcripts / signals / reports 皆以 `daily/YYYY-MM-DD/` 分流保存
-- 支援檢查點、快取、錯誤記錄
 
 ## 快速開始
 
 ```bash
+# 0) 安裝 miniconda
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh # 下載安裝腳本
+bash Miniconda3-latest-Linux-x86_64.sh                                     # 執行安裝腳本
+source ~/.bashrc                                                           # 載入 Shell 設定
+
 # 1) 建立環境
+cd TSNFE
 conda create -n tw-analyst python=3.10 -y
 conda activate tw-analyst
 pip install -r requirements-dev.txt
@@ -25,28 +29,22 @@ pip install -e .
 cp .env.example .env
 # 編輯 .env：填入 YOUTUBE_API_KEY / GOOGLE_API_KEY / FUGLE_API_KEY
 
-# 3) 驗證
-python scripts/test_system.py
-
-# 4) 處理單支影片
+# 3) 處理單支影片
 python scripts/process_video.py "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
 ## 主要輸出位置（已整理）
 
-### 核心資料輸出
-
-- `data/signals/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.json`：單支影片訊號
-- `data/signals/recommendation_list.json`：彙總推薦清單
-- `data/transcripts/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.json`：逐字稿（transcript 流程時）
-- `data/raw/daily/YYYY-MM-DD/{video_id}_YYYYMMDD_HHMMSS.wav`：下載音訊（中介檔）
-
 ### 系統性輸出（集中到 data 子目錄）
 
-- `data/errors/failed_downloads.json`：下載失敗紀錄
-- `data/errors/failed_processing.json`：流程失敗紀錄
-- `data/metadata/video_list.json`：頻道抓取影片清單
-- `data/debug/last_gemini_multimodal_response.json`：最近一次 Gemini 原始回應（除錯）
+- `data/raw/`：下載的音訊/影片中介檔
+- `data/processing/transcripts/`：逐字稿 JSON
+- `data/processing/checkpoints/`：批次處理檢查點（預留，現階段幾乎不使用）
+- `data/processing/errors/`：下載/處理失敗紀錄
+- `data/processing/metadata/`：抓取清單與輔助 metadata
+- `data/processing/debug/`：除錯輸出，例如 Gemini 原始回應
+- `data/processed/signals/`：訊號輸出 JSON 與 recommendation list
+- `data/processed/reports/`：每日報表與摘要
 - `logs/`：程式執行 log（pipeline logger）
 
 ## Repo 結構（精簡版）
@@ -64,13 +62,15 @@ TSNFE/
 ├─ config/                    # YAML 與 prompt 設定
 ├─ data/                      # 執行輸出（runtime artifacts）
 │  ├─ raw/
-│  ├─ transcripts/
-│  ├─ signals/
-│  ├─ checkpoints/
-│  ├─ errors/
-│  ├─ metadata/
-│  ├─ debug/
-│  └─ reports/
+│  ├─ processing/
+│  │  ├─ transcripts/
+│  │  ├─ checkpoints/
+│  │  ├─ errors/
+│  │  ├─ metadata/
+│  │  └─ debug/
+│  └─ processed/
+│     ├─ signals/
+│     └─ reports/
 ├─ logs/                      # 執行 log
 ├─ tests/                     # 測試
 ├─ docs/                      # 文件
@@ -90,17 +90,16 @@ TSNFE/
 
 ## 設定檔
 
-- `.env`：只放「敏感資訊與部署覆蓋」，例如 API Keys 與 `LLM_MODEL`
-- `config/config.yaml`：只放「預設行為與參數」，例如 execution mode、timeout、prompt
+- `.env`：只放「敏感資訊與部署覆蓋」，例如 API Keys
+- `config/config.yaml`：只放「預設行為與參數」，例如 execution mode、timeout、模型、chunk、provider
 - `config/prompts.yaml`：prompt 模板
 
-模型優先順序（Gemini）：
-1. CLI `--llm-model`（若有給）
-2. `.env` 的 `LLM_MODEL`
-3. `config/config.yaml` 的 `extraction.models.gemini`
+模型優先順序：
+1. `config/config.yaml` 的對應模型設定
+2. CLI `--llm-model` / `--llm-provider`（臨時覆蓋，非必要）
 
 執行模式（`scripts/process_video.py`）：
-- `--mode audio`：讀音檔做多模態萃取（預設、最穩）
+- `--mode audio`：讀音檔做多模態萃取（最穩，但費用高）
 - `--mode url`：直接讀 YouTube URL（較不穩，可能誤判影片）
 - `--mode text`：先產生文字，再由 LLM 讀文字
 
@@ -109,9 +108,16 @@ TSNFE/
 - `--text-source cc`：只用快取/YouTube CC
 - `--text-source gemini`：直接用 Gemini 轉錄文字
 
+模型與 chunk 設定（主要放在 `config/config.yaml`）：
+- `transcription.gemini_model`：Gemini 轉錄模型
+- `transcription.model`：Whisper 模型
+- `extraction.models.gemini` / `extraction.models.qwen` / `extraction.models.local_hf`：擷取模型
+- `extraction.chunking`：小模型文字擷取切塊設定
+
 成本追蹤（Pipeline Statistics）：
 - 會讀 Gemini 回傳的 `usage_metadata` token 數
 - 依 `config/config.yaml` 的 `extraction.pricing.gemini` 估算 USD（分 Flash / Pro / Pro>200K）
+- 像 `extraction.pricing.gemini` 這類固定值，也可以留在 config 裡；只有需要改動行為/模型切換的設定才優先放 config。
 
 本地股票代碼資料：
 - `python scripts/update_stock_list.py` 會更新
@@ -119,10 +125,14 @@ TSNFE/
 	- `data/stock_codes/tpex_stocks.csv`（上櫃）
 	- `data/stock_codes/all_stocks.csv`（合併）
 
+目錄用途補充：
+- `checkpoints` 目前是批次續跑的保留欄位，現有流程幾乎不依賴它；如果你不做 resume，可以刪檔，但保留空目錄也沒有壞處。
+- `metadata` 目前有實際用途，像 `video_list.json` 會寫在這裡，不建議刪掉。
+
 音檔轉文字模型：
-- 預設為 `GeminiTranscriber`，模型來自 `GEMINI_TRANSCRIPTION_MODEL`（預設 `gemini-2.5-flash`）
+- 預設為 `GeminiTranscriber`，模型由 `config/config.yaml` 的 `transcription.gemini_model` 控制
 - `--mode text --text-source auto` 會先用快取/YouTube CC，失敗才做 Gemini 轉錄
-- 在 `auto` 且 Gemini 轉錄失敗時，會 fallback 到 `Whisper`（`WHISPER_MODEL`，預設 `medium`）
+- 在 `auto` 且 Gemini 轉錄失敗時，會 fallback 到 `Whisper`，模型由 `config/config.yaml` 的 `transcription.model` 控制
 
 ## GitHub Actions 每日自動化
 
@@ -133,12 +143,6 @@ TSNFE/
 - `data/reports/daily/YYYY-MM-DD/daily_run_summary_YYYYMMDD_HHMMSS.json`
 
 分析師清單在 `config/analysts.yaml`。
-
-請先在 GitHub Repository 設定 Secrets：
-- `YOUTUBE_API_KEY`
-- `GOOGLE_API_KEY`
-- `FUGLE_API_KEY`
-- `YT_COOKIES_TXT`（Netscape cookie 文字）
 
 ## 待實作功能
 - 分析產業說明影片，需學會如何根據產業和優勢條件推理適當標的

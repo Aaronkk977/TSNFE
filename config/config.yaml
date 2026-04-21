@@ -2,7 +2,7 @@
 # Taiwan Analyst Signal Pipeline - Main Configuration File
 # ============================================================================
 # This file defines the core pipeline parameters
-# Environment variables in .env override these values
+# Environment variables in .env are mainly for secrets and limited runtime overrides
 # ============================================================================
 
 pipeline:
@@ -68,11 +68,11 @@ youtube:
 # Transcription Configuration (Whisper/faster-whisper)
 # ============================================================================
 transcription:
-  provider: "gemini"                  # gemini, whisper
+  provider: "whisper"                  # gemini, whisper
   gemini_model: "gemini-2.5-flash"
 
-  # Model size: tiny, base, small, medium, large
-  model: "medium"
+  # Model size: tiny, base, small, medium, large-v3-turbo, large-v3
+  model: "large-v3-turbo"
   
   # Language code
   language: "zh"                     # Chinese
@@ -85,36 +85,35 @@ transcription:
   
   # Voice Activity Detection
   enable_vad: true
-  vad_min_silence_duration_ms: 500
+  vad_min_silence_duration_ms: 1000
   vad_speech_pad_ms: 400
-  
-  # Chunk configuration for long audio
-  chunk_length_minutes: 10           # Split long audio into chunks
-  chunk_overlap_seconds: 5           # Overlap between chunks
   
   # Device settings
   device: "cuda"                     # cuda or cpu
   compute_type: "float16"            # float32, float16, int8
   
-  # Initial prompt (helps with terminology)
-  initial_prompt: |
-    台灣股市金融術語：買進、加碼、賣出、出脫、持有、觀望、
-    嘎空、洗盤、跳空、缺口、壓力、支撐、突破、整理、
-    開盤、收盤、盤中、盤後、大盤、加權、台股、上市、上櫃
-
 # ============================================================================
 # LLM Extraction Configuration
 # ============================================================================
 extraction:
   # Provider: openai, anthropic, gemini
   # Set to "local_hf" to use the local open-source Qwen model via transformers
-  provider: "qwen"
+  provider: "local_hf"
   
   # Model selection per provider
   models:
     gemini: "gemini-2.5-pro"
     local_hf: "Qwen/Qwen2.5-14B-Instruct-AWQ"
-    qwen: "Qwen/Qwen2.5-14B-Instruct-AWQ"
+
+  # Chunking only for smaller text models
+  chunking:
+    enabled: true
+    small_model_patterns:
+      - "gemini-2.5-flash"
+      - "qwen"
+      - "flash"
+    chunk_size_chars: 2500
+    overlap_chars: 200
 
   # Local Hugging Face extraction settings
   local_hf:
@@ -203,12 +202,9 @@ output:
   
   # Directory structure
   directories:
-    transcripts: "./data/transcripts"
-    signals: "./data/signals"
-    checkpoints: "./data/checkpoints"
-    errors: "./data/errors"
-    metadata: "./data/metadata"
-    debug: "./data/debug"
+    raw: "./data/raw"
+    processing: "./data/processing"
+    processed: "./data/processed"
     logs: "./logs"
 
 # ============================================================================
@@ -239,83 +235,8 @@ logging:
   mask_video_ids: true
 
 # ============================================================================
-# Prompt Templates
-# ============================================================================
-prompts:
-  system: |
-    你是一位專業的台股量化分析助手。你的任務是將非結構化的投顧分析逐字稿，轉譯為標準化 JSON 訊號。
-    
-    【提取與判斷規則】
-    0. 實名點名原則（最嚴格限制）：必須是分析師在影片中「明確開口念出」的股票名稱或代碼才可提取。絕不可因分析師提及某產業就自行推敲該產業的代表性股票
-    1. 語意轉換：分析師極少直接說「買/賣」，請依據台股慣用語判斷：
-      - 判定為 buy：逢低佈局、長線看好、上漲空間大、樂觀看待、突破壓力線。
-      - 判定為 sell：悲觀、減碼、形態弱勢、破底/破線、主力倒貨。
-      - 判定為 hold：觀望、等表態、震盪、續抱。
-    2. 股票代碼補全：若分析師只說出公司簡稱（如：台積電），請務必自行補上正確的台股代碼（大多爲四位數，如：2330）。
-    3. 排除雜訊：嚴格忽略「歷史回顧」、「假設性預測（如果...就...）」以及「大盤/總經」的討論。
-    4. 最後定論：若同段影片重複提及同一檔股票，以「最後一次」的結論為準。
-
-    【輸出格式要求】
-    - 必須且只能回傳一個標準的 JSON Array 格式。不要有任何 Markdown 標記（如 ```json）、不要有任何前言或結語。
-    - 如果整段逐字稿中「沒有提到任何具體股票」或「沒有明確買賣訊號」，請嚴格回傳一個空的陣列：[]
-    - 陣列內的每個 JSON Object 必須包含以下欄位：
-      - "stock_code": (字串) 台股 4 位數代碼
-      - "stock_name": (字串) 公司名稱
-      - "action": (字串) 只能是 "buy", "sell", 或 "hold"
-      - "reasoning": (字串) 分析師明確說過的推薦理由，濃縮在 15 字以內。
-  
-  extraction: |
-    請根據上述系統規則，從以下逐字稿中精確提取「實質買賣訊號」。
-    
-    --------
-    {transcript}
-    --------
-
-    請嚴格遵守實名點名原則，提取後直接輸出 JSON。
-
-  system_qwen: |
-    你是一位專業的台股量化分析助手。你的任務是將非結構化的投顧分析逐字稿，轉譯為標準化 JSON 訊號。
-    
-    【提取與判斷規則】
-    0. 實名點名原則（最嚴格限制）：必須是分析師在影片中「明確開口念出」的股票名稱或代碼才可提取。絕不可因分析師提及某產業就自行推敲腦補
-    1. 語意轉換：分析師極少直接說「買/賣」，請依據台股慣用語判斷：
-      - 判定為 buy：逢低佈局、長線看好、上漲空間大、樂觀看待、已突破壓力線。
-      - 判定為 sell：悲觀、減碼、形態弱勢、破底破線、主力倒貨、建議換股。
-      - 判定為 hold：觀望、等、震盪、續抱。
-    2. 股票代碼補全：若分析師只說出公司簡稱（如：台積電），請務必自行補上正確的台股代碼（大多爲四位數，如：2330）。
-    3. 排除雜訊：嚴格忽略「歷史回顧」、「假設性預測（如果...就...）」以及「大盤/總經」的討論。
-    4. 最後定論：若同段影片重複提及同一檔股票，以「最後一次」的結論為準。
-
-    【輸出格式要求】
-    - 必須且只能回傳一個標準的 JSON Array 格式。不要有任何 Markdown 標記（如 ```json）、不要有任何前言或結語。
-    - 如果整段逐字稿中「沒有提到任何具體股票」或「沒有明確買賣訊號」，請嚴格回傳一個空的陣列：[]
-    - 陣列內的每個 JSON Object 必須包含以下欄位：
-      - "stock_code": (字串) 台股 4 位數代碼
-      - "stock_name": (字串) 公司名稱
-      - "action": (字串) 只能是 "buy", "sell", 或 "hold"
-      - "reasoning": (字串) 分析師明確說過的推薦理由，濃縮在 15 字以內。
-
-  extraction_qwen: |
-    請根據上述系統規則，從以下逐字稿中精確提取「實質買賣訊號」。
-    
-    --------
-    {transcript}
-    --------
-
-    請嚴格遵守實名點名原則，提取後直接輸出 JSON。
-
-# ============================================================================
 # Provider-Specific Settings
 # ============================================================================
-openai:
-  api_version: "2024-02-15-preview"
-  api_base: "https://api.openai.com/v1"
-  organization: ""  # Optional: organization ID
-
-anthropic:
-  api_version: "2024-01-15"
-  timeout: 60
-
 google:
   api_version: "v1beta"
   timeout: 60

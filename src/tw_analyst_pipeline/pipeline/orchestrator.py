@@ -55,7 +55,7 @@ class SignalPipeline(LoggerMixin):
 
         # Initialize components
         self.downloader = AudioDownloader(settings)
-        self.transcriber = TranscriberFactory.create(settings)
+        self.transcriber = TranscriberFactory.create(settings, pipeline_config)
         self.fallback_transcriber = None
         self.validator = StockValidator(settings)
         self.llm_extractor = LLMExtractorFactory.create(settings, pipeline_config)
@@ -207,7 +207,7 @@ class SignalPipeline(LoggerMixin):
                             self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
                             if text_transcript_source == "auto":
                                 if self.fallback_transcriber is None:
-                                    self.fallback_transcriber = WhisperTranscriber(self.settings)
+                                    self.fallback_transcriber = WhisperTranscriber(self.settings, self.config)
                                 transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id, published_at=published_at)
                     if not transcript_result or not transcript_result.text:
                         raise RuntimeError("Failed to transcribe audio")

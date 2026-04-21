@@ -130,55 +130,64 @@ class LocalHuggingFaceExtractor(BaseLLMExtractor):
         start_time = time.time()
 
         try:
-            # 1. Grab Prompts
-            system_prompt = self._get_system_prompt()
-            user_prompt = self._get_extraction_prompt(transcript)
-            
-            # Format using chat template for instruct models
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-            
-            prompt = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            should_chunk = self._should_chunk_text_model(self.model_id, section="extraction")
+            chunking_config = self.config.get_chunking_config("extraction")
+            chunk_size = int(chunking_config.get("chunk_size_chars", 2500) or 2500)
+            overlap = int(chunking_config.get("overlap_chars", 200) or 200)
+            chunks = self._chunk_transcript(transcript, chunk_size=chunk_size, overlap=overlap) if should_chunk else [transcript]
+            all_signals_data = []
 
-            # 2. Run Inference
-            self.logger.info(f"Running inference with {self.model_id}...")
-            temperature = self.temperature
-            do_sample = True if temperature > 0 else False
-            
-            # For backtesting, you might tune these parameters:
-            outputs = self.pipe(
-                prompt,
-                max_new_tokens=self.max_new_tokens,
-                temperature=temperature if do_sample else None,
-                do_sample=do_sample,
-                return_full_text=False, # Avoid returning the prompt
-            )
-            
-            response_text = self._extract_generated_text(outputs)
-            if not response_text:
-                raise RuntimeError(
-                    "Local model returned an empty response. "
-                    f"Check model {self.model_id}, token limits, and prompt formatting."
-                )
-            self.logger.debug(f"Raw Model Output:\n{response_text}")
+            for index, chunk in enumerate(chunks, start=1):
+                if len(chunks) > 1:
+                    self.logger.info(f"Processing chunk {index}/{len(chunks)} for {video_id}")
 
-            # 3. Parse JSON using the base parser rules
-            try:
-                signals_data = self._safe_parse_json(response_text)
-            except json.JSONDecodeError as parse_error:
-                self.logger.error(
-                    "Model output was not valid JSON. "
-                    f"Parse error: {parse_error}; raw output starts with: {response_text[:300]!r}"
+                system_prompt = self._get_system_prompt()
+                user_prompt = self._get_extraction_prompt(chunk)
+
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+
+                prompt = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
                 )
-                raise
-            if not isinstance(signals_data, list):
-                signals_data = [signals_data]
+
+                self.logger.info(f"Running inference with {self.model_id}...")
+                temperature = self.temperature
+                do_sample = True if temperature > 0 else False
+
+                outputs = self.pipe(
+                    prompt,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=temperature if do_sample else None,
+                    do_sample=do_sample,
+                    return_full_text=False,
+                )
+
+                response_text = self._extract_generated_text(outputs)
+                if not response_text:
+                    raise RuntimeError(
+                        "Local model returned an empty response. "
+                        f"Check model {self.model_id}, token limits, and prompt formatting."
+                    )
+                self.logger.debug(f"Raw Model Output:\n{response_text}")
+
+                try:
+                    signals_data = self._safe_parse_json(response_text)
+                except json.JSONDecodeError as parse_error:
+                    self.logger.error(
+                        "Model output was not valid JSON. "
+                        f"Parse error: {parse_error}; raw output starts with: {response_text[:300]!r}"
+                    )
+                    raise
+                if not isinstance(signals_data, list):
+                    signals_data = [signals_data]
+                all_signals_data.extend(signals_data)
+
+            signals_data = self._merge_signals_data_keep_last(all_signals_data) if should_chunk else all_signals_data
 
             # 4. Construct schemas
             signals = []
@@ -225,3 +234,19 @@ class LocalHuggingFaceExtractor(BaseLLMExtractor):
         except Exception as e:
             self.logger.error(f"Local extraction failed: {e}")
             raise
+
+    @staticmethod
+    def _merge_signals_data_keep_last(signals_data):
+        merged = {}
+        passthrough = []
+        for item in signals_data:
+            if not isinstance(item, dict):
+                continue
+            stock_code = str(item.get("stock_code") or item.get("ticker") or "").strip().upper()
+            stock_name = str(item.get("stock_name") or "").strip()
+            key = stock_code or stock_name
+            if not key:
+                passthrough.append(item)
+                continue
+            merged[key] = item
+        return [*passthrough, *merged.values()]

@@ -94,22 +94,34 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._sync_huggingface_tokens()
         # Create data directories if they don't exist
         self._ensure_directories()
+
+    def _sync_huggingface_tokens(self):
+        """Expose Hugging Face token aliases expected by downstream SDKs."""
+        token = (self.hugging_face_api_key or "").strip()
+        if not token:
+            return
+
+        os.environ.setdefault("HF_TOKEN", token)
+        os.environ.setdefault("HUGGINGFACE_HUB_TOKEN", token)
 
     def _ensure_directories(self):
         """Create necessary directories."""
         directories = [
             Path(self.data_dir),
             Path(self.data_dir) / "raw",
-            Path(self.data_dir) / "transcripts",
-            Path(self.data_dir) / "signals",
-            Path(self.data_dir) / "checkpoints",
+            Path(self.data_dir) / "processing",
+            Path(self.data_dir) / "processed",
+            Path(self.data_dir) / "processing" / "transcripts",
+            Path(self.data_dir) / "processing" / "checkpoints",
+            Path(self.data_dir) / "processing" / "errors",
+            Path(self.data_dir) / "processing" / "metadata",
+            Path(self.data_dir) / "processing" / "debug",
+            Path(self.data_dir) / "processed" / "signals",
+            Path(self.data_dir) / "processed" / "reports",
             Path(self.data_dir) / "stock_codes",
-            Path(self.data_dir) / "errors",
-            Path(self.data_dir) / "metadata",
-            Path(self.data_dir) / "debug",
-            Path(self.data_dir) / "reports",
             Path(self.log_dir),
         ]
         for directory in directories:
@@ -121,15 +133,15 @@ class Settings(BaseSettings):
 
     @property
     def data_transcripts_dir(self) -> Path:
-        return Path(self.data_dir) / "transcripts"
+        return Path(self.data_dir) / "processing" / "transcripts"
 
     @property
     def data_signals_dir(self) -> Path:
-        return Path(self.data_dir) / "signals"
+        return Path(self.data_dir) / "processed" / "signals"
 
     @property
     def data_checkpoints_dir(self) -> Path:
-        return Path(self.data_dir) / "checkpoints"
+        return Path(self.data_dir) / "processing" / "checkpoints"
 
     @property
     def data_stock_codes_dir(self) -> Path:
@@ -137,19 +149,19 @@ class Settings(BaseSettings):
 
     @property
     def data_errors_dir(self) -> Path:
-        return Path(self.data_dir) / "errors"
+        return Path(self.data_dir) / "processing" / "errors"
 
     @property
     def data_metadata_dir(self) -> Path:
-        return Path(self.data_dir) / "metadata"
+        return Path(self.data_dir) / "processing" / "metadata"
 
     @property
     def data_debug_dir(self) -> Path:
-        return Path(self.data_dir) / "debug"
+        return Path(self.data_dir) / "processing" / "debug"
 
     @property
     def data_reports_dir(self) -> Path:
-        return Path(self.data_dir) / "reports"
+        return Path(self.data_dir) / "processed" / "reports"
 
     @property
     def logs_dir(self) -> Path:
@@ -161,6 +173,7 @@ class PipelineConfig:
 
     def __init__(self, config_path: str = "config/config.yaml"):
         self.config_path = Path(config_path)
+        self.prompts_path = self.config_path.parent / "prompts.yaml"
         self.data = self._load_config()
 
     def _load_config(self) -> dict:
@@ -169,7 +182,33 @@ class PipelineConfig:
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
 
         with open(self.config_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            config_data = yaml.safe_load(f) or {}
+
+        prompts_data = self._load_prompts_config()
+        if prompts_data:
+            existing_prompts = config_data.get("prompts")
+            if not isinstance(existing_prompts, dict):
+                existing_prompts = {}
+            merged_prompts = {**existing_prompts, **prompts_data}
+            config_data["prompts"] = merged_prompts
+
+        return config_data
+
+    def _load_prompts_config(self) -> dict:
+        """Load prompts from dedicated YAML file and normalize structure."""
+        if not self.prompts_path.exists():
+            return {}
+
+        with open(self.prompts_path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+
+        if not isinstance(loaded, dict):
+            return {}
+
+        if "prompts" in loaded and isinstance(loaded.get("prompts"), dict):
+            return loaded["prompts"]
+
+        return loaded
 
     def get(self, key: str, default=None):
         """Get config value by dotted path (e.g., 'pipeline.max_retries')"""
@@ -187,6 +226,53 @@ class PipelineConfig:
 
     def to_dict(self) -> dict:
         return self.data.copy()
+
+    def get_model_name(self, provider: str, default: Optional[str] = None) -> Optional[str]:
+        """Resolve a model name from YAML config with a provider-aware lookup."""
+        provider = (provider or "").strip().lower()
+        if not provider:
+            return default
+
+        candidate_keys = []
+        if provider == "gemini":
+            candidate_keys.extend([
+                "transcription.gemini_model",
+                "extraction.models.gemini",
+            ])
+        elif provider in {"whisper"}:
+            candidate_keys.extend([
+                "transcription.model",
+            ])
+        elif provider in {"qwen", "local_hf"}:
+            candidate_keys.extend([
+                f"extraction.models.{provider}",
+                "extraction.local_hf.model",
+                "extraction.models.local_hf",
+            ])
+        else:
+            candidate_keys.extend([
+                f"extraction.models.{provider}",
+                f"transcription.{provider}_model",
+            ])
+
+        for key in candidate_keys:
+            value = (self.get(key) or "").strip()
+            if value:
+                return value
+
+        return default
+
+    def get_chunking_config(self, section: str) -> dict:
+        """Return a chunking config dict for a given section."""
+        value = self.get(f"{section}.chunking", {}) or {}
+        return value if isinstance(value, dict) else {}
+
+    def get_transcription_provider(self, default: str = "gemini") -> str:
+        """Resolve transcription provider from config with safe fallback."""
+        provider = (self.get("transcription.provider", default) or default).strip().lower()
+        if provider in {"gemini", "whisper"}:
+            return provider
+        return default
 
 
 def load_config(

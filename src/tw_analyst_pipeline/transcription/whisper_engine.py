@@ -12,17 +12,49 @@ from typing import List, Optional
 from faster_whisper import WhisperModel
 
 from ..extraction.schemas import TranscriptResult
-from ..utils.config import Settings
+from ..utils.config import PipelineConfig, Settings
 from ..utils.logging import LoggerMixin
 
 
 class WhisperTranscriber(LoggerMixin):
     """Speech-to-text transcription using faster-whisper."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, pipeline_config: PipelineConfig | None = None):
         self.settings = settings
+        self.config = pipeline_config
         self.output_dir = Path(settings.data_transcripts_dir)
+        self.model_name = self._resolve_model_name()
+        self.device = self._resolve_device()
+        self.compute_type = self._resolve_compute_type()
         self.model = self._load_model()
+
+    def _resolve_model_name(self) -> str:
+        if self.config is not None:
+            model_name = (self.config.get_model_name("whisper") or "").strip()
+            if model_name:
+                return model_name
+        return (self.settings.whisper_model or "medium").strip()
+
+    def _resolve_device(self) -> str:
+        if self.config is not None:
+            configured = (self.config.get("transcription.device") or "").strip().lower()
+            if configured in {"cuda", "cpu"}:
+                return configured
+        return (self.settings.whisper_device or "cuda").strip().lower()
+
+    def _resolve_compute_type(self) -> str:
+        if self.config is not None:
+            configured = (self.config.get("transcription.compute_type") or "").strip().lower()
+            if configured in {"float16", "float32", "int8"}:
+                return configured
+        return (self.settings.whisper_compute_type or "float16").strip().lower()
+
+    def _resolve_initial_prompt(self) -> Optional[str]:
+        if self.config is None:
+            return None
+
+        prompt = (self.config.get("prompts.whisper_initial_prompt") or "").strip()
+        return prompt or None
 
     @staticmethod
     def _current_date_folder(published_at: str = None) -> str:
@@ -51,18 +83,56 @@ class WhisperTranscriber(LoggerMixin):
         )
         return candidates[0] if candidates else None
 
+    def _transcribe_file(self, audio_path: Path) -> tuple[List[dict], Optional[float], str]:
+        segments, info = self.model.transcribe(
+            str(audio_path),
+            language="zh",
+            beam_size=5,
+            best_of=5,
+            patience=1.0,
+            temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+            vad_filter=True,
+            initial_prompt=self._resolve_initial_prompt(),
+            vad_parameters={
+                "min_silence_duration_ms": 500,
+                "speech_pad_ms": 400,
+                "threshold": 0.4,
+            },
+        )
+
+        segment_list = []
+        full_text = []
+
+        for segment in segments:
+            segment_list.append({
+                "id": segment.id,
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text,
+                "confidence": segment.confidence if hasattr(segment, "confidence") else 0.0,
+            })
+            full_text.append(segment.text)
+
+        duration_seconds = info.duration if hasattr(info, "duration") else None
+        return segment_list, duration_seconds, " ".join(full_text)
+
     def _load_model(self) -> WhisperModel:
         """Load Whisper model with specified configuration."""
-        self.logger.info(f"Loading Whisper model: {self.settings.whisper_model}")
+        self.logger.info(
+            "Loading Whisper model: {} (device={}, compute_type={})",
+            self.model_name,
+            self.device,
+            self.compute_type,
+        )
 
         model = WhisperModel(
-            self.settings.whisper_model,
-            device=self.settings.whisper_device,
-            compute_type=self.settings.whisper_compute_type,
+            self.model_name,
+            device=self.device,
+            compute_type=self.compute_type,
             num_workers=1,  # Single worker for stability
         )
 
-        self.logger.info(f"Whisper model loaded on {self.settings.whisper_device}")
+        self.logger.info(f"Whisper model loaded on {self.device}")
         return model
 
     def transcribe(self, audio_path: Path, video_id: Optional[str] = None, published_at: Optional[str] = None) -> TranscriptResult:
@@ -91,49 +161,19 @@ class WhisperTranscriber(LoggerMixin):
         self.logger.info(f"Starting transcription: {video_id}")
 
         try:
-            # Transcribe audio
             import time
 
             start_time = time.time()
-
-            segments, info = self.model.transcribe(
-                str(audio_path),
-                language="zh",
-                beam_size=5,
-                best_of=5,
-                patience=1.0,
-                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
-                vad_filter=True,
-                vad_parameters={
-                    "min_silence_duration_ms": 500,
-                    "speech_pad_ms": 400,
-                    "threshold": 0.4,
-                },
-            )
-
-            # Collect segments
-            segment_list = []
-            full_text = []
-
-            for segment in segments:
-                segment_list.append({
-                    "id": segment.id,
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text,
-                    "confidence": segment.confidence if hasattr(segment, "confidence") else 0.0,
-                })
-                full_text.append(segment.text)
+            segment_list, duration_seconds, transcript_text = self._transcribe_file(audio_path)
 
             processing_time = time.time() - start_time
 
-            # Create result
             result = TranscriptResult(
                 video_id=video_id,
-                text=" ".join(full_text),
+                text=transcript_text,
                 segments=segment_list,
                 language="zh",
-                duration_seconds=info.duration if hasattr(info, "duration") else None,
+                duration_seconds=duration_seconds,
                 processing_time_seconds=processing_time,
             )
 

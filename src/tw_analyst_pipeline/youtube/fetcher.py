@@ -3,10 +3,13 @@ YouTube Data API v3 integration
 Fetch videos from analyst channels
 """
 
+import os
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shutil
+import sys
 from typing import List, Optional
 from urllib.parse import unquote, urlparse
 
@@ -71,6 +74,56 @@ class YouTubeFetcher(LoggerMixin):
         self.youtube = None
 
     @staticmethod
+    def _detect_js_runtimes() -> dict:
+        runtimes = {}
+        runtime_order = ("node", "bun", "deno", "quickjs")
+        for runtime in runtime_order:
+            executable = shutil.which(runtime)
+            if executable:
+                runtimes[runtime] = {"path": executable}
+
+        conda_prefix = os.environ.get("CONDA_PREFIX")
+        if conda_prefix:
+            for runtime in runtime_order:
+                if runtime in runtimes:
+                    continue
+                candidate = Path(conda_prefix) / "bin" / runtime
+                if candidate.exists() and candidate.is_file():
+                    runtimes[runtime] = {"path": str(candidate)}
+
+        python_bin_dir = Path(sys.executable).resolve().parent
+        for runtime in runtime_order:
+            if runtime in runtimes:
+                continue
+            candidate = python_bin_dir / runtime
+            if candidate.exists() and candidate.is_file():
+                runtimes[runtime] = {"path": str(candidate)}
+
+        return runtimes
+
+    def _base_ydl_opts(self) -> dict:
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "remote_components": ["ejs:github"],
+        }
+        js_runtimes = self._detect_js_runtimes()
+        if js_runtimes:
+            opts["js_runtimes"] = js_runtimes
+        return opts
+
+    def save_video_list(self, videos: List[VideoInfo], output_file: Path) -> Path:
+        output_file = Path(output_file)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = [video.to_dict() for video in videos]
+
+        with open(output_file, "w", encoding="utf-8") as file_handle:
+            json.dump(payload, file_handle, ensure_ascii=False, indent=2)
+
+        self.logger.info(f"Saved {len(videos)} videos to {output_file}")
+        return output_file
+
+    @staticmethod
     def _seconds_to_iso8601_duration(seconds: Optional[int]) -> Optional[str]:
         if seconds is None:
             return None
@@ -87,6 +140,12 @@ class YouTubeFetcher(LoggerMixin):
             parts.append(f"{secs}S")
         return "PT" + "".join(parts)
 
+    @staticmethod
+    def _as_utc_aware(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
     def get_channel_id_from_handle(self, handle: str) -> Optional[str]:
         handle = handle.strip()
         if not handle: return None
@@ -94,10 +153,8 @@ class YouTubeFetcher(LoggerMixin):
             handle = f"https://www.youtube.com/@{handle.lstrip('@')}"
 
         ydl_opts = {
+            **self._base_ydl_opts(),
             'extract_flat': True,
-            'quiet': True,
-            'no_warnings': True,
-            'no_warnings': True,
             'playlistend': 1,
         }
         try:
@@ -118,19 +175,17 @@ class YouTubeFetcher(LoggerMixin):
     ) -> List[VideoInfo]:
         self.logger.info(f"Fetching videos from channel: {channel_id}")
         if published_after_dt:
-            after_dt = published_after_dt
+            after_dt = self._as_utc_aware(published_after_dt)
         elif days_back:
-            after_dt = datetime.utcnow() - timedelta(days=days_back)
+            after_dt = datetime.now(timezone.utc) - timedelta(days=days_back)
         else:
             after_dt = None
             
-        before_dt = published_before_dt
+        before_dt = self._as_utc_aware(published_before_dt) if published_before_dt else None
         url = f"https://www.youtube.com/channel/{channel_id}/videos"
         ydl_opts = {
+            **self._base_ydl_opts(),
             'extract_flat': True,
-            'quiet': True,
-            'no_warnings': True,
-            'no_warnings': True,
             'playlistend': 2000 if published_after_dt else (max_results * 2), # Increased for historical fetch
         }
         videos = []
@@ -140,7 +195,6 @@ class YouTubeFetcher(LoggerMixin):
                 entries = info.get('entries', [])
                 if before_dt and entries and entries[0].get('timestamp') is None:
                     self.logger.info("Using binary search for date range (yt-dlp returned no timestamps)")
-                    from datetime import timezone
                     low, high = 0, len(entries) - 1
                     start_idx = 0
                     def fetch_dt(idx):
@@ -149,14 +203,14 @@ class YouTubeFetcher(LoggerMixin):
                         vid_url = f"https://www.youtube.com/watch?v={e.get('id')}"
                         try:
                             opts = {'quiet': True,
-            'no_warnings': True,
             'no_warnings': True, 'extract_flat': 'in_playlist'}
+                            opts.update(self._base_ydl_opts())
                              
                             with yt_dlp.YoutubeDL(opts) as inner_ydl:
                                 d = inner_ydl.extract_info(vid_url, download=False)
                                 ts = d.get('timestamp')
                                 if ts:
-                                    return datetime.utcfromtimestamp(ts).replace(tzinfo=timezone.utc)
+                                    return datetime.fromtimestamp(ts, tz=timezone.utc)
                         except: pass
                         return None
                     
@@ -182,8 +236,8 @@ class YouTubeFetcher(LoggerMixin):
                         vid_url = f"https://www.youtube.com/watch?v={entry.get('id')}"
                         try:
                             opts = {'quiet': True,
-            'no_warnings': True,
             'no_warnings': True, 'extract_flat': 'in_playlist'}
+                            opts.update(self._base_ydl_opts())
                              
                             with yt_dlp.YoutubeDL(opts) as inner_ydl:
                                 d = inner_ydl.extract_info(vid_url, download=False)
@@ -191,10 +245,7 @@ class YouTubeFetcher(LoggerMixin):
                         except:
                             pass
                     if pub_timestamp:
-                        dt = datetime.utcfromtimestamp(pub_timestamp)
-                        if dt.tzinfo is None:
-                            from datetime import timezone
-                            dt = dt.replace(tzinfo=timezone.utc)
+                        dt = datetime.fromtimestamp(pub_timestamp, tz=timezone.utc)
                         if after_dt and dt < after_dt: break
                         if before_dt and dt > before_dt: continue
                         pub_str = dt.isoformat() + "Z"
@@ -230,7 +281,7 @@ class YouTubeFetcher(LoggerMixin):
 
         infos: List[VideoInfo] = []
         ydl_opts = {
-            "quiet": True, "no_warnings": True, "no_warnings": True,
+            **self._base_ydl_opts(),
             "skip_download": True,
         }
 
@@ -242,7 +293,7 @@ class YouTubeFetcher(LoggerMixin):
                     duration_iso = self._seconds_to_iso8601_duration(detail.get("duration"))
                     published_timestamp = detail.get("timestamp")
                     published_at = (
-                        datetime.utcfromtimestamp(published_timestamp).isoformat() + "Z"
+                        datetime.fromtimestamp(published_timestamp, tz=timezone.utc).isoformat() + "Z"
                         if published_timestamp
                         else ""
                     )

@@ -7,6 +7,8 @@ Handles downloading audio from YouTube videos with error handling and retry logi
 import json
 from datetime import datetime
 from pathlib import Path
+import shutil
+import sys
 from typing import Optional
 
 import yt_dlp
@@ -85,7 +87,12 @@ class AudioDownloader(LoggerMixin):
             
             # Progress
             "progress_hooks": [self._progress_hook],
+            "remote_components": ["ejs:github"],
         }
+
+        js_runtimes = self._detect_js_runtimes()
+        if js_runtimes:
+            opts["js_runtimes"] = js_runtimes
 
         configured_cookie = (self.settings.yt_cookies_file or "").strip()
         cookie_candidates = []
@@ -100,6 +107,35 @@ class AudioDownloader(LoggerMixin):
                 break
 
         return opts
+
+    @staticmethod
+    def _detect_js_runtimes() -> dict:
+        runtimes = {}
+        runtime_order = ("node", "bun", "deno", "quickjs")
+        for runtime in runtime_order:
+            executable = shutil.which(runtime)
+            if executable:
+                runtimes[runtime] = {"path": executable}
+
+        # Fallback for conda env binaries when current PATH differs.
+        conda_prefix = os.environ.get("CONDA_PREFIX")
+        if conda_prefix:
+            for runtime in runtime_order:
+                if runtime in runtimes:
+                    continue
+                candidate = Path(conda_prefix) / "bin" / runtime
+                if candidate.exists() and candidate.is_file():
+                    runtimes[runtime] = {"path": str(candidate)}
+
+        python_bin_dir = Path(sys.executable).resolve().parent
+        for runtime in runtime_order:
+            if runtime in runtimes:
+                continue
+            candidate = python_bin_dir / runtime
+            if candidate.exists() and candidate.is_file():
+                runtimes[runtime] = {"path": str(candidate)}
+
+        return runtimes
 
     def _progress_hook(self, d):
         """Progress hook for yt-dlp."""

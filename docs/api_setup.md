@@ -93,9 +93,9 @@ LLM_MODEL=claude-3-sonnet-20240229
 
 ```bash
 GOOGLE_API_KEY=AIza...
-LLM_PROVIDER=gemini
-LLM_MODEL=gemini-2.0-flash
 ```
+
+模型與 provider 請改放在 `config/config.yaml`。
 
 ---
 
@@ -137,8 +137,9 @@ OPENAI_API_KEY=sk-proj-...
 # 可選 (有默認值)
 WHISPER_MODEL=medium
 WHISPER_DEVICE=cuda
-LLM_MODEL=gpt-4o-mini
 ```
+
+同樣地，擷取模型與轉錄模型建議統一由 `config/config.yaml` 管理。
 
 ---
 

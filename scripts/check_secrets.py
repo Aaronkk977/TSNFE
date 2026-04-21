@@ -14,8 +14,6 @@ EXCLUDE_FILES = {
 
 PATTERNS = {
     "Google API key": re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
-    "OpenAI key": re.compile(r"sk-(?:proj-|live-)?[0-9A-Za-z_-]{16,}"),
-    "Anthropic key": re.compile(r"sk-ant-[0-9A-Za-z_-]{16,}"),
     "Generic API assignment": re.compile(
         r"(?i)(api[_-]?key|token|secret)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{20,}"
     ),

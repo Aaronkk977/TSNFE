@@ -139,6 +139,8 @@ def main():
 
         downloader = AudioDownloader(settings) if args.download else None
         transcriber = TranscriberFactory.create(settings) if args.transcribe else None
+        if transcriber is not None:
+            print(f"🧠 Transcriber: {transcriber.__class__.__name__}")
 
         for i, video in enumerate(videos, 1):
             video_url = f"https://youtube.com/watch?v={video.video_id}"

@@ -13,9 +13,10 @@ from typing import List, Optional, Type, Union
 
 import instructor
 from anthropic import Anthropic
-from google.generativeai import GenerativeModel
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
+from google import genai
+from google.genai import types
 
 from ..extraction.schemas import CostMetrics, StockSignal, VideoAnalysis, normalize_label
 from ..utils.config import PipelineConfig, Settings
@@ -69,6 +70,41 @@ class BaseLLMExtractor(LoggerMixin):
             "prompts.system",
             "你是台灣股市分析助手，從影片逐字稿中提取股票訊號。",
         )
+
+    def _chunk_transcript(self, transcript: str, chunk_size: int = 2500, overlap: int = 200) -> List[str]:
+        """Split long transcript into overlapping chunks."""
+        if len(transcript) <= chunk_size:
+            return [transcript]
+
+        chunks: List[str] = []
+        step = max(1, chunk_size - overlap)
+        start = 0
+        while start < len(transcript):
+            end = min(start + chunk_size, len(transcript))
+            chunks.append(transcript[start:end])
+            if end >= len(transcript):
+                break
+            start += step
+        return chunks
+
+    @staticmethod
+    def _is_small_text_model(model_name: str) -> bool:
+        """Treat small/fast models as chunk candidates."""
+        normalized = (model_name or "").lower()
+        return any(
+            token in normalized
+            for token in ("flash", "mini", "tiny", "base", "small")
+        )
+
+    def _should_chunk_text_model(self, model_name: str, section: str = "extraction") -> bool:
+        """Decide whether a model should use chunking."""
+        chunking = self.config.get_chunking_config(section)
+        enabled = chunking.get("enabled", True)
+        if not enabled:
+            return False
+        patterns = chunking.get("small_model_patterns") or ["flash", "mini", "tiny", "base", "small"]
+        normalized = (model_name or "").lower()
+        return any(pattern.lower() in normalized for pattern in patterns)
 
     @staticmethod
     def _action_from_label(label: Optional[str]) -> str:
@@ -211,20 +247,12 @@ class BaseLLMExtractor(LoggerMixin):
         return "\n".join(chunks).strip()
 
     def _resolve_gemini_model_name(self) -> str:
-        """Resolve Gemini model with precedence: runtime/env -> config -> default."""
-        settings_model = (self.settings.llm_model or "").strip()
-        settings_fields = getattr(self.settings, "model_fields_set", set())
-        if settings_model and "llm_model" in settings_fields:
-            return settings_model
-
-        env_model = (os.getenv("LLM_MODEL") or "").strip()
-        if env_model:
-            return env_model
-
+        """Resolve Gemini extraction model from config first."""
         config_model = (self.config.get("extraction.models.gemini") or "").strip()
         if config_model:
             return config_model
 
+        settings_model = (self.settings.llm_model or "").strip()
         if settings_model:
             return settings_model
 
@@ -524,10 +552,8 @@ class GoogleExtractor(BaseLLMExtractor):
         if not settings.google_api_key:
             raise ValueError("GOOGLE_API_KEY not set")
 
-        import google.generativeai as genai
-
-        genai.configure(api_key=settings.google_api_key)
-        self.logger.info("Google Generative AI configured")
+        self.client = genai.Client(api_key=settings.google_api_key)
+        self.logger.info("Google Gen AI client initialized")
 
     @retry_with_backoff(max_attempts=3, exceptions=(Exception,))
     def extract_signals(
@@ -542,31 +568,52 @@ class GoogleExtractor(BaseLLMExtractor):
         start_time = time.time()
 
         try:
-            import google.generativeai as genai
-
             model_name = self._resolve_gemini_model_name()
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=self._get_system_prompt(),
-            )
 
             timeout_seconds = self._get_api_timeout_seconds()
-            prompt = self._get_extraction_prompt(transcript)
+            chunking_config = self.config.get_chunking_config("extraction")
+            chunk_size = int(chunking_config.get("chunk_size_chars", 2500) or 2500)
+            overlap = int(chunking_config.get("overlap_chars", 200) or 200)
+            should_chunk = self._should_chunk_text_model(model_name, section="extraction")
+            chunks = self._chunk_transcript(transcript, chunk_size=chunk_size, overlap=overlap) if should_chunk else [transcript]
+            if should_chunk and len(chunks) > 1:
+                self.logger.info(
+                    "Applying transcript chunking for Gemini Flash: {} chunks",
+                    len(chunks),
+                )
 
-            response = model.generate_content(
-                [prompt],
-                generation_config=genai.types.GenerationConfig(
-                    temperature=self.settings.llm_temperature,
-                    max_output_tokens=self.settings.llm_max_tokens,
-                    response_mime_type="application/json",
-                ),
-                request_options={"timeout": timeout_seconds},
-            )
+            aggregated_signals_data: List[dict] = []
+            total_input_tokens = 0
+            total_output_tokens = 0
 
-            response_text = self._get_response_text_safe(response)
-            signals_data = self._safe_parse_json(response_text)
-            if not isinstance(signals_data, list):
-                signals_data = [signals_data]
+            for index, chunk_text in enumerate(chunks, start=1):
+                if len(chunks) > 1:
+                    self.logger.info("Gemini chunk {}/{}", index, len(chunks))
+
+                prompt = self._get_extraction_prompt(chunk_text)
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self._get_system_prompt(),
+                        temperature=self.settings.llm_temperature,
+                        max_output_tokens=self.settings.llm_max_tokens,
+                        response_mime_type="application/json",
+                    ),
+                    request_options={"timeout": timeout_seconds},
+                )
+
+                prompt_tokens, output_tokens = self._read_usage_metadata_tokens(response)
+                total_input_tokens += prompt_tokens
+                total_output_tokens += output_tokens
+
+                response_text = self._get_response_text_safe(response)
+                chunk_signals_data = self._safe_parse_json(response_text)
+                if not isinstance(chunk_signals_data, list):
+                    chunk_signals_data = [chunk_signals_data]
+                aggregated_signals_data.extend(chunk_signals_data)
+
+            signals_data = self._merge_signals_data_keep_last(aggregated_signals_data)
 
             result = self._build_analysis_from_signals_data(
                 signals_data=signals_data,
@@ -576,12 +623,20 @@ class GoogleExtractor(BaseLLMExtractor):
                 transcript_length_chars=len(transcript),
             )
 
-            self._track_gemini_cost(
-                video_id=video_id,
+            estimated_usd = self._estimate_gemini_cost_usd(
                 model_name=model_name,
-                response=response,
-                processing_time=result.processing_duration_seconds or (time.time() - start_time),
-                signals_extracted=len(result.signals),
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+            )
+            self.cost_metrics.append(
+                CostMetrics(
+                    video_id=video_id,
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    estimated_usd=estimated_usd,
+                    processing_time_seconds=result.processing_duration_seconds or (time.time() - start_time),
+                    signals_extracted=len(result.signals),
+                )
             )
 
             self.logger.info(
@@ -594,6 +649,28 @@ class GoogleExtractor(BaseLLMExtractor):
             self.logger.error(f"Text extraction failed: {e}")
             raise
 
+    @staticmethod
+    def _merge_signals_data_keep_last(signals_data: List[dict]) -> List[dict]:
+        """Merge chunked extraction results and keep the latest conclusion per stock."""
+        if not signals_data:
+            return []
+
+        merged: dict[str, dict] = {}
+        passthrough: List[dict] = []
+
+        for item in signals_data:
+            if not isinstance(item, dict):
+                continue
+            stock_code = str(item.get("stock_code") or item.get("ticker") or "").strip().upper()
+            stock_name = str(item.get("stock_name") or "").strip()
+            key = stock_code or stock_name
+            if not key:
+                passthrough.append(item)
+                continue
+            merged[key] = item
+
+        return [*passthrough, *merged.values()]
+
     def _fallback_extract_signals_data(
         self,
         model,
@@ -601,8 +678,6 @@ class GoogleExtractor(BaseLLMExtractor):
         transcript: str,
         seed_tickers: List[str],
     ):
-        import google.generativeai as genai
-
         seed_text = ", ".join(seed_tickers[:20]) if seed_tickers else "無"
         fallback_prompt = f"""
 請根據逐字稿提取台股標的訊號，輸出 JSON 陣列。
@@ -626,11 +701,14 @@ class GoogleExtractor(BaseLLMExtractor):
 只輸出 JSON，不要其他說明。
 """.strip()
 
-        fallback_response = model.generate_content(
-            [system_prompt, fallback_prompt],
-            generation_config=genai.types.GenerationConfig(
+        fallback_response = self.client.models.generate_content(
+            model=self._resolve_gemini_model_name(),
+            contents=fallback_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
                 temperature=self.settings.llm_temperature,
                 max_output_tokens=max(1200, int(self.settings.llm_max_tokens * 0.7)),
+                response_mime_type="application/json",
             ),
         )
 
@@ -655,26 +733,20 @@ class GoogleExtractor(BaseLLMExtractor):
         uploaded_file = None
 
         try:
-            import google.generativeai as genai
-
             model_name = self._resolve_gemini_model_name()
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=self._get_system_prompt()
-            )
             timeout_seconds = self._get_api_timeout_seconds()
 
             self.logger.info(
                 "Uploading media file for multimodal extraction: {}",
                 str(media_path),
             )
-            uploaded_file = genai.upload_file(path=str(media_path))
+            uploaded_file = self.client.files.upload(file=str(media_path))
             
             # Wait for the file to be processed with timeout
             self.logger.info("Waiting for uploaded media to become active...")
             wait_start = time.time()
             while True:
-                f = genai.get_file(uploaded_file.name)
+                f = self.client.files.get(name=uploaded_file.name)
                 if f.state.name == "ACTIVE":
                     break
                 if f.state.name == "FAILED":
@@ -690,14 +762,15 @@ class GoogleExtractor(BaseLLMExtractor):
                 model_name
             )
             
-            gen_config = genai.types.GenerationConfig(
-                temperature=self.settings.llm_temperature,
-                max_output_tokens=self.settings.llm_max_tokens,
-            )
-            
-            response = model.generate_content(
-                [uploaded_file, self._get_multimodal_prompt()],
-                generation_config=gen_config,
+            response = self.client.models.generate_content(
+                model=model_name,
+                contents=[self._get_multimodal_prompt(), uploaded_file],
+                config=types.GenerateContentConfig(
+                    system_instruction=self._get_system_prompt(),
+                    temperature=self.settings.llm_temperature,
+                    max_output_tokens=self.settings.llm_max_tokens,
+                    response_mime_type="application/json",
+                ),
                 request_options={"timeout": timeout_seconds},
             )
 
@@ -766,7 +839,7 @@ class GoogleExtractor(BaseLLMExtractor):
         finally:
             if uploaded_file is not None:
                 try:
-                    genai.delete_file(uploaded_file.name)
+                    self.client.files.delete(name=uploaded_file.name)
                 except Exception:
                     pass
 
@@ -783,22 +856,18 @@ class GoogleExtractor(BaseLLMExtractor):
         start_time = time.time()
 
         try:
-            import google.generativeai as genai
-
             model_name = self._resolve_gemini_model_name()
-            model = genai.GenerativeModel(model_name)
             timeout_seconds = self._get_api_timeout_seconds()
 
             self.logger.info(
                 "Requesting Gemini URL multimodal extraction (timeout={}s)",
                 timeout_seconds,
             )
-            response = model.generate_content(
-                [
-                    self._get_system_prompt(),
-                    self._get_youtube_url_multimodal_prompt(youtube_url=youtube_url),
-                ],
-                generation_config=genai.types.GenerationConfig(
+            response = self.client.models.generate_content(
+                model=model_name,
+                contents=self._get_youtube_url_multimodal_prompt(youtube_url=youtube_url),
+                config=types.GenerateContentConfig(
+                    system_instruction=self._get_system_prompt(),
                     temperature=self.settings.llm_temperature,
                     max_output_tokens=self.settings.llm_max_tokens,
                     response_mime_type="application/json",
@@ -962,11 +1031,11 @@ class GoogleExtractor(BaseLLMExtractor):
         transcript: str,
         seed_tickers: List[str],
     ) -> List[dict]:
-        import google.generativeai as genai
-
-        response = model.generate_content(
-            [system_prompt, self._get_candidate_prompt(transcript, seed_tickers)],
-            generation_config=genai.types.GenerationConfig(
+        response = self.client.models.generate_content(
+            model=self._resolve_gemini_model_name(),
+            contents=self._get_candidate_prompt(transcript, seed_tickers),
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
                 temperature=0.0,
                 max_output_tokens=1200,
                 response_mime_type="application/json",
@@ -1075,17 +1144,14 @@ class GoogleExtractor(BaseLLMExtractor):
         if not missing_candidates:
             return []
 
-        import google.generativeai as genai
-
-        response = model.generate_content(
-            [
-                system_prompt,
-                self._get_missing_candidate_prompt(
-                    transcript=transcript,
-                    missing_candidates=missing_candidates,
-                ),
-            ],
-            generation_config=genai.types.GenerationConfig(
+        response = self.client.models.generate_content(
+            model=self._resolve_gemini_model_name(),
+            contents=self._get_missing_candidate_prompt(
+                transcript=transcript,
+                missing_candidates=missing_candidates,
+            ),
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
                 temperature=0.0,
                 max_output_tokens=self.settings.llm_max_tokens,
                 response_mime_type="application/json",
@@ -1272,20 +1338,6 @@ class QwenOpenAIExtractor(OpenAIExtractor):
         )
         self.logger.info("Local Qwen vLLM OpenAI client initialized via http://0.0.0.0:8000/v1")
 
-    def _chunk_transcript(self, transcript: str, chunk_size: int = 2500, overlap: int = 200) -> list:
-        """Split transcript into chunks approx 2000 chars long with overlap."""
-        if len(transcript) <= chunk_size:
-            return [transcript]
-        chunks = []
-        start = 0
-        while start < len(transcript):
-            end = min(start + chunk_size, len(transcript))
-            chunks.append(transcript[start:end])
-            if end == len(transcript):
-                break
-            start += (chunk_size - overlap)
-        return chunks
-
     def extract_signals(
         self,
         transcript: str,
@@ -1295,8 +1347,19 @@ class QwenOpenAIExtractor(OpenAIExtractor):
         """Extract signals using sliding window chunking for Qwen to avoid losing focus."""
         self.logger.info(f"Extracting signals from {video_id} using Qwen with Sliding Window (length: {len(transcript)})")
         start_time = time.time()
-        
-        chunks = self._chunk_transcript(transcript)
+
+        model_name = (
+            self.config.get_model_name("qwen")
+            or self.config.get_model_name("local_hf")
+            or "Qwen/Qwen2.5-14B-Instruct-AWQ"
+        )
+        chunking_config = self.config.get_chunking_config("extraction")
+        chunk_size = int(chunking_config.get("chunk_size_chars", 2500) or 2500)
+        overlap = int(chunking_config.get("overlap_chars", 200) or 200)
+        chunks = self._chunk_transcript(transcript, chunk_size=chunk_size, overlap=overlap)
+        if not self._should_chunk_text_model(model_name, section="extraction"):
+            chunks = [transcript]
+
         all_signals = []
         total_input_tokens = 0
         total_output_tokens = 0
@@ -1307,7 +1370,6 @@ class QwenOpenAIExtractor(OpenAIExtractor):
             try:
                 system_prompt = self._get_system_prompt()
                 user_prompt = self._get_extraction_prompt(chunk)
-                model_name = self.config.get("extraction.models", {}).get("qwen", "Qwen/Qwen2.5-14B-Instruct-AWQ")
                 
                 response = self.client.chat.completions.create(
                     model=model_name,

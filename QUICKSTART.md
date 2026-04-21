@@ -28,9 +28,9 @@ cp .env.example .env
 YOUTUBE_API_KEY=...
 GOOGLE_API_KEY=...
 FUGLE_API_KEY=...
-LLM_PROVIDER=gemini
-TRANSCRIPTION_PROVIDER=gemini
 ```
+
+模型、provider、chunk 設定請放在 `config/config.yaml`。
 
 ## 3. 驗證系統
 

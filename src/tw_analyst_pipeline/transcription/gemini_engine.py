@@ -1,36 +1,46 @@
-import os
 """
 Gemini transcription engine.
 Converts audio to transcript using Gemini 2.5 Flash.
 """
 
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from ..extraction.schemas import TranscriptResult
-from ..utils.config import Settings
+from ..utils.config import PipelineConfig, Settings
 from ..utils.logging import LoggerMixin
 
 
 class GeminiTranscriber(LoggerMixin):
     """Speech-to-text transcription using Gemini audio understanding."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, pipeline_config: PipelineConfig | None = None):
         self.settings = settings
         self.output_dir = Path(settings.data_transcripts_dir)
+        self.config = pipeline_config
 
         if not settings.google_api_key:
             raise ValueError("GOOGLE_API_KEY not set")
 
-        genai.configure(api_key=settings.google_api_key)
-        self.model_name = settings.gemini_transcription_model
+        self.client = genai.Client(api_key=settings.google_api_key)
+        self.model_name = self._resolve_model_name()
         self.logger.info(f"Gemini transcriber initialized: {self.model_name}")
+
+    def _resolve_model_name(self) -> str:
+        if self.config is not None:
+            model_name = (self.config.get("transcription.gemini_model") or "").strip()
+            if model_name:
+                return model_name
+
+        return (self.settings.gemini_transcription_model or "gemini-2.5-flash").strip()
 
     @staticmethod
     def _current_date_folder(published_at: str = None) -> str:
@@ -72,14 +82,33 @@ class GeminiTranscriber(LoggerMixin):
 
         uploaded_file = None
         try:
-            uploaded_file = genai.upload_file(path=str(audio_path))
-            model = genai.GenerativeModel(self.model_name)
+            uploaded_file = self.client.files.upload(file=str(audio_path))
+
+            self.logger.info("Waiting for uploaded audio to become active...")
+            wait_start = time.time()
+            while True:
+                file_info = self.client.files.get(name=uploaded_file.name)
+                if file_info.state.name == "ACTIVE":
+                    break
+                if file_info.state.name == "FAILED":
+                    raise Exception("File processing failed on Gemini servers.")
+                if time.time() - wait_start > 120:
+                    raise Exception("Timeout waiting for file to become active.")
+                time.sleep(2)
+
             prompt = (
                 "請將這段中文語音完整轉成繁體中文逐字稿。"
                 "保留金融術語、股票代碼與數字。"
                 "只輸出逐字稿文字，不要輸出額外說明。"
             )
-            response = model.generate_content([prompt, uploaded_file])
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[prompt, uploaded_file],
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=8192,
+                ),
+            )
             transcript_text = (response.text or "").strip()
 
             processing_time = time.time() - start_time
@@ -114,7 +143,7 @@ class GeminiTranscriber(LoggerMixin):
         finally:
             if uploaded_file is not None:
                 try:
-                    genai.delete_file(uploaded_file.name)
+                    self.client.files.delete(name=uploaded_file.name)
                 except Exception:
                     pass
 
