@@ -5,7 +5,7 @@ Converts audio to text with GPU acceleration
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,6 +17,11 @@ from ..utils.logging import LoggerMixin
 
 
 class WhisperTranscriber(LoggerMixin):
+    @staticmethod
+    def _is_cuda_oom_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return "out of memory" in message and "cuda" in message
+
     """Speech-to-text transcription using faster-whisper."""
 
     def __init__(self, settings: Settings, pipeline_config: PipelineConfig | None = None):
@@ -61,10 +66,14 @@ class WhisperTranscriber(LoggerMixin):
         if published_at:
             try:
                 from datetime import timezone, timedelta, datetime
+                import dateutil.parser
                 if isinstance(published_at, datetime):
                     dt = published_at
                 else:
-                    dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                    dt_str = str(published_at)
+                if dt_str.endswith("+00:00Z"):
+                    dt_str = dt_str[:-1]
+                dt = dateutil.parser.parse(dt_str)
                 tz_taipei = timezone(timedelta(hours=8))
                 return dt.astimezone(tz_taipei).strftime("%Y-%m-%d")
             except Exception:
@@ -90,7 +99,8 @@ class WhisperTranscriber(LoggerMixin):
             beam_size=5,
             best_of=5,
             patience=1.0,
-            temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+            temperature=(0.0, 0.2, 0.4),
+            no_speech_threshold=0.3,
             vad_filter=True,
             initial_prompt=self._resolve_initial_prompt(),
             vad_parameters={
@@ -188,13 +198,19 @@ class WhisperTranscriber(LoggerMixin):
             return result
 
         except Exception as e:
+            if self.device == "cuda" and self._is_cuda_oom_error(e):
+                self.logger.error(
+                    "CUDA OOM for %s, mark failed and skip this item (no CPU fallback)",
+                    video_id,
+                )
             self.logger.error(f"Transcription failed for {video_id}: {str(e)}")
             raise
 
     def _save_transcript(self, result: TranscriptResult, published_at: Optional[str] = None) -> Path:
         """Save transcript to JSON file."""
         output_dir = self._dated_output_dir(published_at)
-        output_file = output_dir / f"{result.video_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+        now_utc = datetime.now(UTC)
+        output_file = output_dir / f"{result.video_id}_{now_utc.strftime('%Y%m%d_%H%M%S')}.json"
 
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -207,7 +223,7 @@ class WhisperTranscriber(LoggerMixin):
                     "language": result.language,
                     "duration_seconds": result.duration_seconds,
                     "processing_time_seconds": result.processing_time_seconds,
-                    "saved_at": datetime.utcnow().isoformat(),
+                    "saved_at": now_utc.isoformat(),
                 }
                 json.dump(data, f, ensure_ascii=False, indent=2)
 

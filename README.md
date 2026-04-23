@@ -92,7 +92,7 @@ TSNFE/
 
 - `.env`：只放「敏感資訊與部署覆蓋」，例如 API Keys
 - `config/config.yaml`：只放「預設行為與參數」，例如 execution mode、timeout、模型、chunk、provider
-- `config/prompts.yaml`：prompt 模板
+- `config/prompts.yaml`：prompt 模板，包含語音轉錄模型（Whisper initial prompt）和特徵擷取LLM
 
 模型優先順序：
 1. `config/config.yaml` 的對應模型設定

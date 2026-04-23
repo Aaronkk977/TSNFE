@@ -68,6 +68,138 @@ class SignalPipeline(LoggerMixin):
         self.error_log: List[ProcessingError] = []
         self._has_requested_download = False
 
+    def get_video_metadata(self, video_id: str) -> tuple[Optional[int], Optional[str]]:
+        """Fetch view_count and published_at for a video when available."""
+        view_count = None
+        published_at = None
+        if self.youtube_fetcher:
+            details = self.youtube_fetcher.get_video_details([video_id])
+            if details:
+                view_count = details[0].view_count
+                published_at = details[0].published_at
+        return view_count, published_at
+
+    def download_audio_for_video(
+        self,
+        video_url: str,
+        video_id: str,
+        skip_download: bool = False,
+        published_at: Optional[str] = None,
+    ) -> Path:
+        """Resolve local audio path by cache lookup or downloading."""
+        if skip_download:
+            audio_path = self.downloader._find_latest_audio_file(video_id)
+            if audio_path is None:
+                raise RuntimeError(
+                    f"Skip download requested but file does not exist for video: {video_id}"
+                )
+            self.logger.info(f"Using existing local audio: {audio_path}")
+            return audio_path
+
+        self._sleep_between_download_requests()
+        audio_path = self.downloader.download(video_url, published_at=published_at)
+        if not audio_path:
+            raise RuntimeError("Failed to download audio")
+        return audio_path
+
+    def generate_transcript_for_video(
+        self,
+        video_url: str,
+        video_id: str,
+        skip_download: bool = False,
+        text_transcript_source: str = "auto",
+        published_at: Optional[str] = None,
+    ):
+        """Generate transcript using fast-track path and audio fallback."""
+        text_transcript_source = (text_transcript_source or "auto").lower()
+        if text_transcript_source not in {"auto", "cc", "gemini"}:
+            raise ValueError(
+                f"Unsupported text_transcript_source: {text_transcript_source}"
+            )
+
+        transcript_result = None
+        should_try_cc = text_transcript_source in {"auto", "cc"}
+        if should_try_cc and hasattr(self.transcriber, "try_fast_track"):
+            self.logger.info("Stage 1: Fast-track transcript (cache/YouTube CC)")
+            transcript_result = self.transcriber.try_fast_track(
+                video_id,
+                published_at=published_at,
+            )
+
+        should_transcribe = text_transcript_source in {"auto", "gemini"}
+        if not transcript_result and should_transcribe:
+            self.logger.info("Stage 2: Handling audio")
+            audio_path = self.download_audio_for_video(
+                video_url=video_url,
+                video_id=video_id,
+                skip_download=skip_download,
+                published_at=published_at,
+            )
+
+            self.logger.info("Stage 3: Transcribing audio")
+            try:
+                transcript_result = self.transcriber.transcribe(
+                    audio_path,
+                    video_id,
+                    published_at=published_at,
+                )
+            except Exception as e:
+                self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
+                if text_transcript_source == "auto":
+                    if self.fallback_transcriber is None:
+                        self.fallback_transcriber = WhisperTranscriber(self.settings, self.config)
+                    transcript_result = self.fallback_transcriber.transcribe(
+                        audio_path,
+                        video_id,
+                        published_at=published_at,
+                    )
+
+        if not transcript_result or not transcript_result.text:
+            raise RuntimeError("Failed to transcribe audio")
+
+        self.logger.info(
+            f"Transcript ready: {len(transcript_result.text)} chars, "
+            f"{len(transcript_result.segments)} segments"
+        )
+        return transcript_result
+
+    def process_transcript(
+        self,
+        transcript: str,
+        video_id: str,
+        analyst_name: Optional[str] = None,
+        video_view_count: Optional[int] = None,
+        video_published_at: Optional[str] = None,
+        processing_start: Optional[float] = None,
+        save_result: bool = True,
+    ) -> VideoAnalysis:
+        """Run extraction/validation/save stages from an existing transcript string."""
+        pipeline_start = processing_start if processing_start is not None else time.time()
+
+        self.logger.info("Stage 4: Extracting signals using LLM")
+        analysis = self.llm_extractor.extract_signals(
+            transcript=transcript,
+            video_id=video_id,
+            analyst_name=analyst_name,
+        )
+
+        self.logger.info("Stage 5: Validating signals")
+        if self.settings.validate_stock_codes:
+            analysis.signals = self.validator.resolve_signals(analysis.signals)
+
+        analysis.video_view_count = video_view_count
+        analysis.video_published_at = video_published_at
+        analysis.transcript_length_chars = len(transcript)
+        analysis.recommendation_feature = self._build_recommendation_feature(analysis)
+
+        analysis.processing_duration_seconds = time.time() - pipeline_start
+
+        if save_result:
+            self.logger.info("Stage 6: Saving results")
+            self._save_analysis(analysis)
+
+        return analysis
+
     def _apply_extraction_overrides_from_config(self) -> None:
         """Apply YAML extraction settings when they are explicitly configured."""
         provider = (self.config.get("extraction.provider") or "").strip().lower()
@@ -135,13 +267,7 @@ class SignalPipeline(LoggerMixin):
                         f"Unsupported text_transcript_source: {text_transcript_source}"
                     )
 
-                view_count = None
-                published_at = None
-                if self.youtube_fetcher:
-                    details = self.youtube_fetcher.get_video_details([video_id])
-                    if details:
-                        view_count = details[0].view_count
-                        published_at = details[0].published_at
+                view_count, published_at = self.get_video_metadata(video_id)
 
                 if mode == "url":
                     if not hasattr(self.llm_extractor, "extract_signals_from_youtube_url"):
@@ -158,17 +284,12 @@ class SignalPipeline(LoggerMixin):
 
                 elif mode == "audio" and use_media_extraction:
                     self.logger.info("Stage 1: Handling audio for end-to-end multimodal extraction")
-                    
-                    if skip_download:
-                        audio_path = self.downloader._find_latest_audio_file(video_id)
-                        if audio_path is None:
-                            raise RuntimeError(f"Skip download requested but file does not exist for video: {video_id}")
-                        self.logger.info(f"Using existing local audio: {audio_path}")
-                    else:
-                        self._sleep_between_download_requests()
-                        audio_path = self.downloader.download(video_url, published_at=published_at)
-                        if not audio_path:
-                            raise RuntimeError("Failed to download audio")
+                    audio_path = self.download_audio_for_video(
+                        video_url=video_url,
+                        video_id=video_id,
+                        skip_download=skip_download,
+                        published_at=published_at,
+                    )
 
                     self.logger.info("Stage 2: Extracting signals directly from media using LLM")
                     analysis = self.llm_extractor.extract_signals_from_media(
@@ -177,71 +298,36 @@ class SignalPipeline(LoggerMixin):
                         analyst_name=analyst_name,
                     )
                 else:
-                    # Stage 1: Fast-track transcript (cache/YouTube CC)
-                    transcript_result = None
-                    should_try_cc = text_transcript_source in {"auto", "cc"}
-                    if should_try_cc and hasattr(self.transcriber, "try_fast_track"):
-                        self.logger.info("Stage 1: Fast-track transcript (cache/YouTube CC)")
-                        transcript_result = self.transcriber.try_fast_track(video_id, published_at=published_at)
-
-                    # Stage 2: Audio pipeline fallback
-                    should_transcribe = text_transcript_source in {"auto", "gemini"}
-                    if not transcript_result and should_transcribe:
-                        self.logger.info("Stage 2: Handling audio")
-                        
-                        if skip_download:
-                            audio_path = self.downloader._find_latest_audio_file(video_id)
-                            if audio_path is None:
-                                raise RuntimeError(f"Skip download requested but file does not exist for video: {video_id}")
-                            self.logger.info(f"Using existing local audio: {audio_path}")
-                        else:
-                            self._sleep_between_download_requests()
-                            audio_path = self.downloader.download(video_url, published_at=published_at)
-                            if not audio_path:
-                                raise RuntimeError("Failed to download audio")
-
-                        self.logger.info("Stage 3: Transcribing audio")
-                        try:
-                            transcript_result = self.transcriber.transcribe(audio_path, video_id, published_at=published_at)
-                        except Exception as e:
-                            self.logger.warning(f"Primary transcriber failed, fallback to Whisper: {e}")
-                            if text_transcript_source == "auto":
-                                if self.fallback_transcriber is None:
-                                    self.fallback_transcriber = WhisperTranscriber(self.settings, self.config)
-                                transcript_result = self.fallback_transcriber.transcribe(audio_path, video_id, published_at=published_at)
-                    if not transcript_result or not transcript_result.text:
-                        raise RuntimeError("Failed to transcribe audio")
-
-                    self.logger.info(
-                        f"Transcript ready: {len(transcript_result.text)} chars, "
-                        f"{len(transcript_result.segments)} segments"
+                    transcript_result = self.generate_transcript_for_video(
+                        video_url=video_url,
+                        video_id=video_id,
+                        skip_download=skip_download,
+                        text_transcript_source=text_transcript_source,
+                        published_at=published_at,
                     )
 
-                    # Stage 4: Extract signals
-                    self.logger.info("Stage 4: Extracting signals using LLM")
-                    analysis = self.llm_extractor.extract_signals(
+                    analysis = self.process_transcript(
                         transcript=transcript_result.text,
                         video_id=video_id,
                         analyst_name=analyst_name,
+                        video_view_count=view_count,
+                        video_published_at=published_at,
+                        processing_start=pipeline_start,
+                        save_result=True,
                     )
 
-                # Stage 5: Validate
-                self.logger.info("Stage 5: Validating signals")
-                if self.settings.validate_stock_codes:
-                    analysis.signals = self.validator.resolve_signals(analysis.signals)
+                if mode in {"url", "audio"}:
+                    self.logger.info("Stage 5: Validating signals")
+                    if self.settings.validate_stock_codes:
+                        analysis.signals = self.validator.resolve_signals(analysis.signals)
 
-                analysis.video_view_count = view_count
-                analysis.video_published_at = published_at
-                labels = [
-                    normalize_label(sig.normalized_label or sig.implied_label)
-                    for sig in analysis.signals
-                ]
-                analysis.recommendation_feature = self._build_recommendation_feature(analysis)
+                    analysis.video_view_count = view_count
+                    analysis.video_published_at = published_at
+                    analysis.recommendation_feature = self._build_recommendation_feature(analysis)
 
-                # Stage 6: Save results
-                self.logger.info("Stage 6: Saving results")
-                analysis.processing_duration_seconds = time.time() - pipeline_start
-                self._save_analysis(analysis)
+                    self.logger.info("Stage 6: Saving results")
+                    analysis.processing_duration_seconds = time.time() - pipeline_start
+                    self._save_analysis(analysis)
 
                 # Total processing time
                 total_time = analysis.processing_duration_seconds

@@ -31,8 +31,15 @@ class AudioDownloader(LoggerMixin):
         if published_at:
             try:
                 from datetime import timezone, timedelta, datetime
-                # Parse ISO format, accounting for Z
-                dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                import dateutil.parser
+                # Parse ISO format
+                if isinstance(published_at, datetime):
+                    dt = published_at
+                else:
+                    dt_str = str(published_at)
+                    if dt_str.endswith("+00:00Z"):
+                        dt_str = dt_str[:-1]  # Remove trailing Z
+                    dt = dateutil.parser.parse(dt_str)
                 tz_taipei = timezone(timedelta(hours=8))
                 return dt.astimezone(tz_taipei).strftime("%Y-%m-%d")
             except Exception:
@@ -226,6 +233,8 @@ class AudioDownloader(LoggerMixin):
             audio_file = self._find_audio_file(video_id)
             if audio_file and audio_file.exists():
                 self.logger.info(f"Successfully downloaded: {audio_file}")
+                max_keep = int(os.environ.get("AUDIO_CACHE_MAX_KEEP", "20") or "20")
+                self.maintain_audio_cache(max_keep=max_keep)
                 return audio_file
             else:
                 raise FileNotFoundError(f"Audio file not found for video {video_id}")
@@ -253,6 +262,98 @@ class AudioDownloader(LoggerMixin):
     def _find_audio_file(self, video_id: str) -> Optional[Path]:
         """Find the downloaded audio file."""
         return self._find_latest_audio_file(video_id)
+
+    @staticmethod
+    def _extract_video_id_from_audio_file(audio_file: Path) -> str:
+        stem = audio_file.stem
+        if "_" in stem:
+            return stem.split("_", 1)[0]
+        return stem
+
+    def _list_audio_files_sorted(self, subfolder: str) -> list[Path]:
+        files = [
+            p
+            for p in self.output_dir.glob(f"{subfolder}/**/*.wav")
+            if p.is_file()
+        ]
+        return sorted(files, key=lambda p: p.stat().st_mtime)
+
+    def _get_transcribed_video_ids(self, subfolder: str) -> set[str]:
+        ids: set[str] = set()
+        transcript_root = Path(self.settings.data_transcripts_dir) / subfolder
+        if not transcript_root.exists():
+            return ids
+
+        for path in transcript_root.glob("**/*.json"):
+            if not path.is_file():
+                continue
+            stem = path.stem
+            if not stem:
+                continue
+            if "_" in stem:
+                ids.add(stem.split("_", 1)[0])
+            else:
+                ids.add(stem)
+        return ids
+
+    def cleanup_empty_audio_dirs(self, subfolder: Optional[str] = None) -> int:
+        """Remove empty date folders after wav deletion."""
+        removed = 0
+        target_subfolder = subfolder or os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily")
+        root = self.output_dir / target_subfolder
+        if not root.exists():
+            return removed
+
+        dirs = sorted(
+            [p for p in root.glob("**/*") if p.is_dir()],
+            key=lambda p: len(p.parts),
+            reverse=True,
+        )
+        for dir_path in dirs:
+            try:
+                next(dir_path.iterdir())
+            except StopIteration:
+                dir_path.rmdir()
+                removed += 1
+            except Exception:
+                continue
+
+        return removed
+
+    def maintain_audio_cache(self, max_keep: int = 20):
+        """Keep at most N audio files, deleting oldest untranscribed first."""
+        if max_keep <= 0:
+            return
+
+        subfolder = os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily")
+        audio_files = self._list_audio_files_sorted(subfolder)
+        if len(audio_files) <= max_keep:
+            return
+
+        transcribed_ids = self._get_transcribed_video_ids(subfolder)
+        deleted = 0
+
+        for audio_file in audio_files:
+            if len(audio_files) - deleted <= max_keep:
+                break
+
+            video_id = self._extract_video_id_from_audio_file(audio_file)
+            if video_id in transcribed_ids:
+                continue
+
+            try:
+                audio_file.unlink()
+                deleted += 1
+                self.logger.info(f"Deleted old untranscribed audio cache: {audio_file}")
+            except Exception as e:
+                self.logger.warning(f"Failed to delete audio cache {audio_file}: {e}")
+
+        removed_dirs = self.cleanup_empty_audio_dirs(subfolder=subfolder)
+        if deleted > 0 or removed_dirs > 0:
+            self.logger.info(
+                f"Audio cache maintenance complete: deleted_files={deleted}, "
+                f"removed_empty_dirs={removed_dirs}"
+            )
 
     def _log_failed_download(self, video_url: str, error: str):
         """Log failed download to file."""
@@ -294,3 +395,7 @@ class AudioDownloader(LoggerMixin):
                         self.logger.info(f"Deleted old file: {file_path}")
                     except Exception as e:
                         self.logger.warning(f"Failed to delete {file_path}: {e}")
+
+        removed_dirs = self.cleanup_empty_audio_dirs()
+        if removed_dirs > 0:
+            self.logger.info(f"Removed {removed_dirs} empty audio directories")

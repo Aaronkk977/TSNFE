@@ -170,6 +170,14 @@ def main():
                     if transcript:
                         print(f"  ✓ Transcript ready: {len(transcript.text)} chars")
                         print(f"  📝 Preview: {transcript.text[:100]}...")
+                        transcript_file = None
+                        if hasattr(transcriber, "_find_latest_transcript_file"):
+                            try:
+                                transcript_file = transcriber._find_latest_transcript_file(video.video_id)
+                            except Exception:
+                                transcript_file = None
+                        if transcript_file:
+                            print(f"  📄 Transcript JSON: {transcript_file}")
                     else:
                         print(f"  ✗ Transcription failed")
 

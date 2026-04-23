@@ -9,6 +9,7 @@ Daily automation script:
 
 import argparse
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import json
 import random
@@ -28,6 +29,7 @@ from tw_analyst_pipeline.extraction.schemas import VideoAnalysis, normalize_labe
 from tw_analyst_pipeline.pipeline.orchestrator import SignalPipeline
 from tw_analyst_pipeline.utils.config import get_pipeline_config, get_settings
 from tw_analyst_pipeline.utils.logging import setup_logging
+from tw_analyst_pipeline.youtube.downloader import AudioDownloader
 from tw_analyst_pipeline.youtube.fetcher import YouTubeFetcher
 
 
@@ -298,6 +300,12 @@ def main() -> int:
     parser.add_argument("--min-duration-seconds", type=int, default=180)
     parser.add_argument("--mode", choices=["audio", "url", "text"], default=None)
     parser.add_argument("--text-source", choices=["auto", "cc", "gemini"], default=None)
+    parser.add_argument(
+        "--download-workers",
+        type=int,
+        default=4,
+        help="Parallel workers for pre-download stage",
+    )
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
     parser.add_argument(
         "--llm-provider",
@@ -369,7 +377,6 @@ def main() -> int:
 
     analyses: List[VideoAnalysis] = []
     run_rows = []
-    processed_videos = 0
     processed_video_total = 0
     updated_video_total = 0
 
@@ -406,8 +413,11 @@ def main() -> int:
         published_after_dt = window_start_dt
         published_before_dt = window_end_dt
 
+    video_tasks = []
+    max_videos = max(1, args.max_videos)
+
     for item in analysts:
-        if processed_video_total >= max(1, args.max_videos):
+        if len(video_tasks) >= max_videos:
             break
 
         analyst_name = item["name"]
@@ -441,70 +451,128 @@ def main() -> int:
             updated_video_total += len(videos)
 
             for video_index, selected_video in enumerate(videos, start=1):
-                if processed_video_total >= max(1, args.max_videos):
+                if len(video_tasks) >= max_videos:
                     break
 
-                _sleep_before_next_video(processed_videos)
                 video_url = f"https://youtube.com/watch?v={selected_video.video_id}"
-                processed_videos += 1
-                processed_video_total += 1
-
-                try:
-                    analysis = pipeline.process_video(
-                        video_url=video_url,
-                        video_id=selected_video.video_id,
-                        analyst_name=analyst_name,
-                        skip_download=False,
-                        mode=mode,
-                        text_transcript_source=text_source,
-                    )
-
-                    if analysis is None:
-                        run_rows.append(
-                            {
-                                "analyst": analyst_name,
-                                "status": "analysis_none",
-                                "video_id": selected_video.video_id,
-                                "video_title": selected_video.title,
-                                "video_view_count": selected_video.view_count,
-                                "video_published_at": selected_video.published_at,
-                                "video_index": video_index,
-                            }
-                        )
-                    else:
-                        rec_count, no_rec_count, neutral_count = _count_signal_labels(analysis)
-                        analyses.append(analysis)
-                        run_rows.append(
-                            {
-                                "analyst": analyst_name,
-                                "status": "ok",
-                                "video_id": analysis.video_id,
-                                "video_title": selected_video.title,
-                                "signals": len(analysis.signals),
-                                "video_view_count": analysis.video_view_count,
-                                "video_published_at": analysis.video_published_at,
-                                "video_index": video_index,
-                                "recommended_count": rec_count,
-                                "not_recommended_count": no_rec_count,
-                                "neutral_count": neutral_count,
-                            }
-                        )
-                except Exception as e:
-                    run_rows.append(
-                        {
-                            "analyst": analyst_name,
-                            "status": "error",
-                            "error": str(e),
-                            "video_id": selected_video.video_id,
-                            "video_title": selected_video.title,
-                            "video_view_count": selected_video.view_count,
-                            "video_published_at": selected_video.published_at,
-                            "video_index": video_index,
-                        }
-                    )
+                video_tasks.append(
+                    {
+                        "task_id": len(video_tasks) + 1,
+                        "analyst_name": analyst_name,
+                        "video": selected_video,
+                        "video_url": video_url,
+                        "video_index": video_index,
+                    }
+                )
 
         except Exception as e:
             run_rows.append({"analyst": analyst_name, "status": "error", "error": str(e)})
+
+    print(f"[INFO] Collected {len(video_tasks)} video tasks")
+
+    download_results = {task["task_id"]: {"ok": True, "audio_path": None, "error": None} for task in video_tasks}
+
+    if mode != "url" and video_tasks:
+        download_workers = max(1, min(args.download_workers, len(video_tasks)))
+        print(f"[INFO] Stage 1: Pre-downloading audio with {download_workers} workers")
+
+        def _download_task(task):
+            downloader = AudioDownloader(settings)
+            selected_video = task["video"]
+            audio_path = downloader.download(task["video_url"], published_at=selected_video.published_at)
+            return task["task_id"], str(audio_path) if audio_path else None
+
+        with ThreadPoolExecutor(max_workers=download_workers) as executor:
+            future_to_task = {executor.submit(_download_task, task): task for task in video_tasks}
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                task_id = task["task_id"]
+                try:
+                    _, audio_path = future.result()
+                    if not audio_path:
+                        raise RuntimeError("download returned empty path")
+                    download_results[task_id] = {"ok": True, "audio_path": audio_path, "error": None}
+                except Exception as e:
+                    download_results[task_id] = {"ok": False, "audio_path": None, "error": str(e)}
+
+    print("[INFO] Stage 2: Running serial inference with GPU-safe mode")
+    for task in video_tasks:
+        selected_video = task["video"]
+        analyst_name = task["analyst_name"]
+        video_index = task["video_index"]
+        task_id = task["task_id"]
+
+        if mode != "url" and not download_results[task_id]["ok"]:
+            run_rows.append(
+                {
+                    "analyst": analyst_name,
+                    "status": "download_error",
+                    "error": download_results[task_id]["error"],
+                    "video_id": selected_video.video_id,
+                    "video_title": selected_video.title,
+                    "video_view_count": selected_video.view_count,
+                    "video_published_at": selected_video.published_at,
+                    "video_index": video_index,
+                }
+            )
+            continue
+
+        _sleep_before_next_video(processed_video_total)
+        processed_video_total += 1
+
+        try:
+            analysis = pipeline.process_video(
+                video_url=task["video_url"],
+                video_id=selected_video.video_id,
+                analyst_name=analyst_name,
+                skip_download=(mode != "url"),
+                mode=mode,
+                text_transcript_source=text_source,
+            )
+
+            if analysis is None:
+                run_rows.append(
+                    {
+                        "analyst": analyst_name,
+                        "status": "analysis_none",
+                        "video_id": selected_video.video_id,
+                        "video_title": selected_video.title,
+                        "video_view_count": selected_video.view_count,
+                        "video_published_at": selected_video.published_at,
+                        "video_index": video_index,
+                    }
+                )
+            else:
+                rec_count, no_rec_count, neutral_count = _count_signal_labels(analysis)
+                analyses.append(analysis)
+                run_rows.append(
+                    {
+                        "analyst": analyst_name,
+                        "status": "ok",
+                        "video_id": analysis.video_id,
+                        "video_title": selected_video.title,
+                        "signals": len(analysis.signals),
+                        "video_view_count": analysis.video_view_count,
+                        "video_published_at": analysis.video_published_at,
+                        "video_index": video_index,
+                        "recommended_count": rec_count,
+                        "not_recommended_count": no_rec_count,
+                        "neutral_count": neutral_count,
+                    }
+                )
+        except Exception as e:
+            run_rows.append(
+                {
+                    "analyst": analyst_name,
+                    "status": "error",
+                    "error": str(e),
+                    "video_id": selected_video.video_id,
+                    "video_title": selected_video.title,
+                    "video_view_count": selected_video.view_count,
+                    "video_published_at": selected_video.published_at,
+                    "video_index": video_index,
+                }
+            )
 
     ordered_stocks, matrix, stock_display = _collect_matrix(analyses)
     stock_rankings = _build_stock_rankings(analyses)

@@ -47,10 +47,14 @@ class GeminiTranscriber(LoggerMixin):
         if published_at:
             try:
                 from datetime import timezone, timedelta, datetime
+                import dateutil.parser
                 if isinstance(published_at, datetime):
                     dt = published_at
                 else:
-                    dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                    dt_str = str(published_at)
+                if dt_str.endswith("+00:00Z"):
+                    dt_str = dt_str[:-1]
+                dt = dateutil.parser.parse(dt_str)
                 tz_taipei = timezone(timedelta(hours=8))
                 return dt.astimezone(tz_taipei).strftime("%Y-%m-%d")
             except Exception:
