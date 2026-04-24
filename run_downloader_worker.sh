@@ -11,7 +11,7 @@ python scripts/01_fetch_video_list.py --start-date "$START_DATE" --end-date "$EN
 
 while true; do
   # 2. Download media based on the central registry
-  python scripts/02_download_media.py --max-audio-cache 20 --start-date "$START_DATE" --end-date "$END_DATE" --run-tag "$RUN_TAG"
+  python scripts/02_download_media.py --max-audio-cache 300 --start-date "$START_DATE" --end-date "$END_DATE" --run-tag "$RUN_TAG"
   echo "[Downloader] Sleeping before next batch..."
   sleep 60
 done

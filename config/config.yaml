@@ -72,7 +72,7 @@ transcription:
   gemini_model: "gemini-2.5-flash"
 
   # Model size: tiny, base, small, medium, large-v3-turbo, large-v3
-  model: "large-v3-turbo"
+  model: "large-v3"
   
   # Language code
   language: "zh"                     # Chinese

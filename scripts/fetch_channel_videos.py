@@ -23,7 +23,7 @@ def main():
         description="Fetch and process videos from YouTube analyst channel"
     )
     parser.add_argument(
-        "channel",
+        "--channel",
         help="Channel handle (e.g., @win16888) or URL",
     )
     parser.add_argument(

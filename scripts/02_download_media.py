@@ -76,15 +76,21 @@ def _has_youtube_cc(video_id: str, settings) -> bool:
         cookie_path = _resolve_youtube_cookie_path(settings)
         if cookie_path:
             try:
-                items = YouTubeTranscriptApi.get_transcript(
-                    video_id,
-                    languages=languages,
-                    cookies=str(cookie_path),
-                )
-                print(f"[INFO] CC check using cookies for {video_id}: {cookie_path}")
-            except TypeError:
+                if hasattr(YouTubeTranscriptApi, "get_transcript"):
+                    items = YouTubeTranscriptApi.get_transcript(
+                        video_id,
+                        languages=languages,
+                        cookies=str(cookie_path),
+                    )
+                    print(f"[INFO] CC check using cookies for {video_id}: {cookie_path}")
+                else:
+                    print(
+                        "[WARN] youtube-transcript-api has no get_transcript(); "
+                        "fallback to fetch() without explicit cookies"
+                    )
+            except (TypeError, AttributeError):
                 print(
-                    "[WARN] youtube-transcript-api does not accept cookies parameter in get_transcript; "
+                    "[WARN] youtube-transcript-api cannot use cookies in get_transcript; "
                     "fallback to fetch()"
                 )
 

@@ -23,8 +23,9 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-26/0sjBxcmGDno_1776931280.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-26/0sjBxcmGDno_1776931280.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-26/0sjBxcmGDno_20260423_165221.json"
   },
   "usWInXuYzHE": {
     "video_id": "usWInXuYzHE",
@@ -36,34 +37,37 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-14/usWInXuYzHE_1776931316.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-14/usWInXuYzHE_1776931316.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-14/usWInXuYzHE_20260423_165347.json"
   },
   "6xzAPcBxq_Y": {
     "video_id": "6xzAPcBxq_Y",
     "video_url": "https://youtube.com/watch?v=6xzAPcBxq_Y",
     "title": "【台股暴跌1000點 輝達財報造假? 引爆AI泡沫!】2025.11.21(字幕版)",
     "published_at": "2025-11-21T10:06:05+00:00Z",
-    "view_count": 89440,
+    "view_count": 89445,
     "duration": "2823.0",
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-11-21/6xzAPcBxq_Y_1776931342.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-21/6xzAPcBxq_Y_1776931342.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-21/6xzAPcBxq_Y_20260423_170138.json"
   },
   "IUqPvkiba6Q": {
     "video_id": "IUqPvkiba6Q",
     "video_url": "https://youtube.com/watch?v=IUqPvkiba6Q",
     "title": "【Gemini改寫歷史 明年台股3萬6 !】2025.11.28(字幕版)",
     "published_at": "2025-11-28T10:43:18+00:00Z",
-    "view_count": 87947,
+    "view_count": 87948,
     "duration": "3126.0",
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-11-28/IUqPvkiba6Q_1776931386.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-28/IUqPvkiba6Q_1776931386.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-28/IUqPvkiba6Q_20260423_171045.json"
   },
   "vwoVpJg-WvM": {
     "video_id": "vwoVpJg-WvM",
@@ -75,21 +79,23 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-11-13/vwoVpJg-WvM_1776931428.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-13/vwoVpJg-WvM_1776931428.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-13/vwoVpJg-WvM_20260423_172614.json"
   },
   "S16Viejs1NQ": {
     "video_id": "S16Viejs1NQ",
     "video_url": "https://youtube.com/watch?v=S16Viejs1NQ",
     "title": "【Gemini腰斬降價 AI全面爆發 這幾檔記憶體要噴了!】2025.12.30(字幕版)",
     "published_at": "2025-12-30T10:53:43+00:00Z",
-    "view_count": 79534,
+    "view_count": 79535,
     "duration": "3008.0",
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-30/S16Viejs1NQ_1776931465.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-30/S16Viejs1NQ_1776931465.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-30/S16Viejs1NQ_20260423_173906.json"
   },
   "0RDwO-fZhsk": {
     "video_id": "0RDwO-fZhsk",
@@ -101,8 +107,9 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-11-20/0RDwO-fZhsk_1776931506.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-20/0RDwO-fZhsk_1776931506.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-20/0RDwO-fZhsk_20260423_174543.json"
   },
   "JOwcgkzssB4": {
     "video_id": "JOwcgkzssB4",
@@ -114,21 +121,23 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-04/JOwcgkzssB4_1776931539.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-04/JOwcgkzssB4_1776931539.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-04/JOwcgkzssB4_20260423_175450.json"
   },
   "X2l4wRufnxY": {
     "video_id": "X2l4wRufnxY",
     "video_url": "https://youtube.com/watch?v=X2l4wRufnxY",
     "title": "【緊急分析 資金湧向這類AI股 鴻海緯創被拋棄了？】2025.12.01(字幕版)",
     "published_at": "2025-12-01T10:47:44+00:00Z",
-    "view_count": 75641,
+    "view_count": 75642,
     "duration": "2893.0",
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-01/X2l4wRufnxY_1776931577.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-01/X2l4wRufnxY_1776931577.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-01/X2l4wRufnxY_20260423_180047.json"
   },
   "2ZxT8RiCcMA": {
     "video_id": "2ZxT8RiCcMA",
@@ -140,21 +149,23 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-05/2ZxT8RiCcMA_1776931618.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-05/2ZxT8RiCcMA_1776931618.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-05/2ZxT8RiCcMA_20260423_180543.json"
   },
   "jbxNOHv2uBM": {
     "video_id": "jbxNOHv2uBM",
     "video_url": "https://youtube.com/watch?v=jbxNOHv2uBM",
     "title": "【全市場只有我敢講！1121 起漲點抓到了 年底 29000 不改變】2025.12.12(字幕版)",
     "published_at": "2025-12-12T10:44:09+00:00Z",
-    "view_count": 73176,
+    "view_count": 73177,
     "duration": "2816.0",
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-12/jbxNOHv2uBM_1776931654.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-12/jbxNOHv2uBM_1776931654.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-12/jbxNOHv2uBM_20260423_181152.json"
   },
   "SACaVpKQQ54": {
     "video_id": "SACaVpKQQ54",
@@ -166,8 +177,9 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-19/SACaVpKQQ54_1776931691.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-19/SACaVpKQQ54_1776931691.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-19/SACaVpKQQ54_20260423_181521.json"
   },
   "nx_gDEZqEnE": {
     "video_id": "nx_gDEZqEnE",
@@ -179,21 +191,23 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-12-24/nx_gDEZqEnE_1776931726.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-24/nx_gDEZqEnE_1776931726.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-24/nx_gDEZqEnE_20260423_182048.json"
   },
   "lCvxTon9rTo": {
     "video_id": "lCvxTon9rTo",
     "video_url": "https://youtube.com/watch?v=lCvxTon9rTo",
     "title": "【鴻海最新財報超猛 廣達緯創將復活 台塑大賣南亞科】2025.11.12(字幕版)",
     "published_at": "2025-11-12T10:44:41+00:00Z",
-    "view_count": 67379,
+    "view_count": 67380,
     "duration": "2624.0",
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-11-12/lCvxTon9rTo_1776931762.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-12/lCvxTon9rTo_1776931762.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-12/lCvxTon9rTo_20260423_182514.json"
   },
   "gX0ym0i_XPI": {
     "video_id": "gX0ym0i_XPI",
@@ -205,21 +219,23 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-11-07/gX0ym0i_XPI_1776931800.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-07/gX0ym0i_XPI_1776931800.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-07/gX0ym0i_XPI_20260423_183109.json"
   },
   "ue0xl2Qzt0M": {
     "video_id": "ue0xl2Qzt0M",
     "video_url": "https://youtube.com/watch?v=ue0xl2Qzt0M",
     "title": "【不可能AI泡沫!  這AI程式讓台股上三萬】2025.11.24(字幕版)",
     "published_at": "2025-11-24T10:46:04+00:00Z",
-    "view_count": 55285,
+    "view_count": 55289,
     "duration": "2935.0",
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "audio_ready",
-    "audio_path": "data/raw/history/2025-11-24/ue0xl2Qzt0M_1776931845.wav"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-24/ue0xl2Qzt0M_1776931845.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-24/ue0xl2Qzt0M_20260423_183519.json"
   },
   "KlVLtXB2PpU": {
     "video_id": "KlVLtXB2PpU",
@@ -231,7 +247,9 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "pending"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-11-17/KlVLtXB2PpU_1776961863.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-11-17/KlVLtXB2PpU_20260423_184035.json"
   },
   "H_IR1pxgEc8": {
     "video_id": "H_IR1pxgEc8",
@@ -243,7 +261,9 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "pending"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-29/H_IR1pxgEc8_1776961899.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-29/H_IR1pxgEc8_20260423_184613.json"
   },
   "SnCi2ElXiD0": {
     "video_id": "SnCi2ElXiD0",
@@ -255,6 +275,8 @@
     "analyst_name": "郭哲榮分析師-摩爾證券投顧",
     "channel": "@s178",
     "channel_id": "UChfl3auNxAxOR3wy8a8ysQQ",
-    "status": "pending"
+    "status": "transcribed",
+    "audio_path": "data/raw/history/2025-12-16/SnCi2ElXiD0_1776961938.wav",
+    "transcript_path": "data/processing/transcripts/history/2025-12-16/SnCi2ElXiD0_20260423_185139.json"
   }
 }

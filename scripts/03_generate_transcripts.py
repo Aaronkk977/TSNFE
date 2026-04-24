@@ -98,15 +98,21 @@ def _try_youtube_cc(video_id: str, item: dict, settings) -> Optional[tuple[Trans
 
         if cookie_path:
             try:
-                transcript_items = YouTubeTranscriptApi.get_transcript(
-                    video_id,
-                    languages=languages,
-                    cookies=str(cookie_path),
-                )
-                print(f"[INFO] YouTube CC request using cookies: {cookie_path}")
-            except TypeError:
+                if hasattr(YouTubeTranscriptApi, "get_transcript"):
+                    transcript_items = YouTubeTranscriptApi.get_transcript(
+                        video_id,
+                        languages=languages,
+                        cookies=str(cookie_path),
+                    )
+                    print(f"[INFO] YouTube CC request using cookies: {cookie_path}")
+                else:
+                    print(
+                        "[WARN] youtube-transcript-api has no get_transcript(); "
+                        "fallback to fetch() without explicit cookies"
+                    )
+            except (TypeError, AttributeError):
                 print(
-                    "[WARN] youtube-transcript-api does not accept cookies parameter; "
+                    "[WARN] youtube-transcript-api cannot use cookies in get_transcript; "
                     "fallback to fetch() without explicit cookies"
                 )
 
@@ -267,6 +273,9 @@ def main() -> int:
                 "transcript_chars": t_chars,
                 "transcript_path": str(existing_file),
             })
+
+            _update_registry(settings, video_id, {"status": "transcribed", "transcript_path": str(existing_file)})
+            
             continue
 
         transcript_result = None

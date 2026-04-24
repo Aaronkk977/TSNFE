@@ -1,4 +1,5 @@
 import os
+import math 
 """
 Whisper transcription engine using faster-whisper
 Converts audio to text with GPU acceleration
@@ -100,13 +101,16 @@ class WhisperTranscriber(LoggerMixin):
             best_of=5,
             patience=1.0,
             temperature=(0.0, 0.2, 0.4),
-            no_speech_threshold=0.3,
+            no_speech_threshold=0.6,
             vad_filter=True,
             initial_prompt=self._resolve_initial_prompt(),
+
+            # condition_on_previous_text=False,
+            compression_ratio_threshold=2.4,
+            # logprob_threshold=-1.0,
             vad_parameters={
-                "min_silence_duration_ms": 500,
+                "min_silence_duration_ms": 1000,
                 "speech_pad_ms": 400,
-                "threshold": 0.4,
             },
         )
 
@@ -114,6 +118,12 @@ class WhisperTranscriber(LoggerMixin):
         full_text = []
 
         for segment in segments:
+
+            if hasattr(segment, "avg_logprob"):
+                conf = math.exp(segment.avg_logprob)
+            else:
+                conf = 0.0
+
             segment_list.append({
                 "id": segment.id,
                 "start": segment.start,
