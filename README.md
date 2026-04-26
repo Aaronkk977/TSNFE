@@ -144,12 +144,6 @@ TSNFE/
 
 分析師清單在 `config/analysts.yaml`。
 
-## 待實作功能
-- 分析產業說明影片，需學會如何根據產業和優勢條件推理適當標的
-- Daily 產出的 table 可以加上觀看數欄位，分析師由觀看數大排到小
-- 公司清單要每天更新一次
-
-
 ## 注意事項
 
 - 不要提交 `.env`、cookie、或任何私有憑證。
@@ -180,3 +174,14 @@ TSNFE/
 - `docs/api_setup.md`：API 設定
 - `docs/github_actions_daily_table.md`：每日自動報表（含 Secrets）
 - `examples/example_pipeline.py`：程式呼叫範例
+
+## 待做
+現在的時區和我的時間不一樣（台北時間）
+是否可支援多transcriber 同時工作 且不會發生碰撞
+
+下載完所有語音檔後 可以在檔案裡標記 讓transcriber知道可以停下來 而不是while loop永不停
+有時候文字轉錄的太爛 我會把檔案刪掉 能不能在哪個環節讓transcriber可以去例行偵測 更新狀態
+
+中斷後重新 downloader 顯示 [INFO] Total pending videos: 20 transcriber卻抓不到
+刪除 pending video 儲列 也不用刪除語音檔 工作站空間夠
+現在下載好語音檔還是會去yt下載 只是不會轉檔webm->wav而已 重新撰寫檢查機制

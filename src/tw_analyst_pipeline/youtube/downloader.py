@@ -52,7 +52,7 @@ class AudioDownloader(LoggerMixin):
 
     def _find_latest_audio_file(self, video_id: str) -> Optional[Path]:
         candidates = sorted(
-            self.output_dir.glob(f"{os.environ.get('PIPELINE_OUTPUT_SUBFOLDER', 'daily')}/*/{video_id}_*.wav"),
+            self.output_dir.rglob(f"*{video_id}*.wav"),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
@@ -75,7 +75,7 @@ class AudioDownloader(LoggerMixin):
             ],
             
             # Output template
-            "outtmpl": str(output_dir / "%(id)s_%(epoch)s.%(ext)s"),
+            "outtmpl": str(output_dir / "%(id)s.%(ext)s"),
             
             # Audio-specific options
             "keepvideo": False,  # Don't keep video file

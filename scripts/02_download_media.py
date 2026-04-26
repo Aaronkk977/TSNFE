@@ -164,6 +164,7 @@ def main() -> int:
 
     setup_logging(level=args.log_level)
     os.environ["AUDIO_CACHE_MAX_KEEP"] = str(max(0, args.max_audio_cache))
+
     def _load_items(settings, input_file: str | None) -> list:
         if input_file:
             return read_json(Path(input_file)).get("items", [])
@@ -178,7 +179,7 @@ def main() -> int:
             items = [
                 v
                 for k, v in registry.items()
-                if v.get("status") in ("pending", "discovered", "download_failed")
+                if v.get("status") in ("pending", "discovered")
             ]
             return items
             
@@ -241,6 +242,7 @@ def main() -> int:
             _update_registry(settings, video_id, {"status": "audio_ready", "audio_path": str(audio_path)})
         except Exception as e:
             results.append({**item, "status": "download_failed", "audio_path": None, "error": str(e)})
+            _update_registry(settings, video_id, {"status": "download_failed"})
 
     run_tag = (args.run_tag or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
     out_file = settings.data_metadata_dir / f"download_status_{run_tag}.json"

@@ -105,12 +105,13 @@ class WhisperTranscriber(LoggerMixin):
             vad_filter=True,
             initial_prompt=self._resolve_initial_prompt(),
 
-            # condition_on_previous_text=False,
+            condition_on_previous_text=False,
             compression_ratio_threshold=2.4,
             # logprob_threshold=-1.0,
             vad_parameters={
-                "min_silence_duration_ms": 1000,
+                "min_silence_duration_ms": 500,
                 "speech_pad_ms": 400,
+                "threshold": 0.4,
             },
         )
 
