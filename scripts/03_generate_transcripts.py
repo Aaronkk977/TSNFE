@@ -320,7 +320,6 @@ def main() -> int:
         except Exception as e:
             print(f"[ERROR] Transcription failed for {video_id}: {e}")
             outputs.append({**item, "status": "transcribe_failed", "error": str(e)})
-            _update_registry(settings, video_id, {"status": "transcribe_failed"})
 
     output_payload = {
         "generated_at": datetime.now(TZ_TAIPEI).isoformat(timespec="seconds"),

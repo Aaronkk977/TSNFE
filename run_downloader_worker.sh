@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/bin/bashsource local/conda_commands.sh
+source /data1/yclin/miniconda3/bin/activate tw-analyst
 export PIPELINE_OUTPUT_SUBFOLDER=history
 START_DATE=2025-07-01
 END_DATE=2025-08-31

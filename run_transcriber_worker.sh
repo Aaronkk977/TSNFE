@@ -1,6 +1,9 @@
 #!/bin/bash
+source local/conda_commands.sh
+source /data1/yclin/miniconda3/bin/activate tw-analyst
+
 export PIPELINE_OUTPUT_SUBFOLDER=history
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=5
 RUN_TAG=$(date +%Y%m%d_%H%M%S)
 
 echo "========== [Worker 2] Transcriber Started =========="
