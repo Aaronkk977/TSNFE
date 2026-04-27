@@ -215,32 +215,44 @@ class StockValidator(LoggerMixin):
             mention: Stock name, nickname, or code
 
         Returns:
-            4-digit stock code or None if not found
+            4-digit or custom string stock code, or None if not found
         """
 
         if not mention:
             return None
 
         mention = str(mention).strip()
+        mention_lower = mention.lower()
 
-        # Direct alias match
-        if mention in self.aliases:
-            return self.aliases[mention]
+        # Direct alias match (exact)
+        for alias, code in self.aliases.items():
+            if alias.lower() == mention_lower:
+                return code
 
-        # Exact code match (with zero-padding)
+        # Exact code match
         if mention.isdigit():
             code = mention.zfill(4)
             if code in self.valid_codes:
                 return code
+            if mention.upper() in self.valid_codes:
+                return mention.upper()
+        else:
+            if mention.upper() in self.valid_codes:
+                return mention.upper()
 
-        # Fuzzy match (substring)
-        for alias, code in self.aliases.items():
-            if mention.lower() in alias.lower() or alias.lower() in mention.lower():
+        # Exact name match (case insensitive)
+        for code, name in self.stock_names.items():
+            if name.lower() == mention_lower:
                 return code
 
-        # Search in stock names
+        # Fuzzy match alias (substring)
+        for alias, code in self.aliases.items():
+            if mention_lower in alias.lower() or alias.lower() in mention_lower:
+                return code
+
+        # Fuzzy match stock names (substring)
         for code, name in self.stock_names.items():
-            if mention.lower() in name.lower() or name.lower() in mention.lower():
+            if mention_lower in name.lower() or name.lower() in mention_lower:
                 return code
 
         return None
@@ -313,6 +325,18 @@ class StockValidator(LoggerMixin):
             code = code.zfill(4)
         return self.stock_names.get(code)
 
+    def _find_homophone_code(self, name: str) -> Optional[str]:
+        try:
+            import pypinyin
+            name_pinyin = [p[0] for p in pypinyin.pinyin(name, style=pypinyin.Style.NORMAL)]
+            for code, s_name in self.stock_names.items():
+                s_name_pinyin = [p[0] for p in pypinyin.pinyin(s_name, style=pypinyin.Style.NORMAL)]
+                if len(name_pinyin) == len(s_name_pinyin) and len(name_pinyin) > 0 and name_pinyin == s_name_pinyin:
+                    return code
+        except ImportError:
+            pass
+        return None
+
     def resolve_signals(self, signals: List) -> List:
         """
         Validate and resolve signal stock codes.
@@ -326,31 +350,72 @@ class StockValidator(LoggerMixin):
 
         valid_signals = []
         dropped_count = 0
+        from collections import OrderedDict
+        deduped = OrderedDict()
 
         for signal in signals:
-            # Try to resolve stock code from name first, as names from transcript are more reliable
             resolved_from_name = self.resolve_stock_code(signal.stock_name)
             resolved_from_code = self.resolve_stock_code(signal.stock_code)
             
             resolved_code = None
-            if resolved_from_name and resolved_from_code:
-                if resolved_from_name != resolved_from_code:
+            resolved_name = signal.stock_name
+            
+            orig_name = str(signal.stock_name or "").strip()
+            orig_code = str(signal.stock_code or "").strip()
+            clean_code = orig_code.zfill(4) if orig_code.isdigit() else orig_code
+            code_expected_name = self.stock_names.get(clean_code)
+
+            if resolved_from_name and clean_code and resolved_from_name == clean_code:
+                # Both name and code match
+                resolved_code = clean_code
+                resolved_name = self.stock_names.get(resolved_code, orig_name)
+            elif resolved_from_name and self.validate_stock_code(resolved_from_name):
+                # Name can be used to find a code, replace the wrong code
+                if resolved_from_name != orig_code:
                     self.logger.info(
-                        f"Correcting LLM hallucinated code for '{signal.stock_name}': {resolved_from_code} -> {resolved_from_name}"
+                        f"Correcting LLM hallucinated code for '{orig_name}': {orig_code} -> {resolved_from_name}"
                     )
                 resolved_code = resolved_from_name
-            elif resolved_from_name:
-                resolved_code = resolved_from_name
-            elif resolved_from_code:
-                resolved_code = resolved_from_code
+                resolved_name = self.stock_names.get(resolved_code, orig_name)
+            else:
+                homophone_code = self._find_homophone_code(orig_name)
+                if homophone_code and self.validate_stock_code(homophone_code):
+                    # Name is a homophone with another company
+                    resolved_code = homophone_code
+                    resolved_name = self.stock_names.get(resolved_code, orig_name)
+                    self.logger.info(
+                        f"Correcting by homophone: {orig_name} -> {resolved_name} ({resolved_code})"
+                    )
+                elif code_expected_name and len(set(orig_name) & set(code_expected_name)) >= 1:
+                    # Code corresponds to a company that shares at least one char with name
+                    resolved_code = clean_code
+                    resolved_name = code_expected_name
+                    self.logger.info(
+                        f"Corrected name '{orig_name}' to '{resolved_name}' matching code {resolved_code} (shares character)"
+                    )
+                elif resolved_from_code and self.validate_stock_code(resolved_from_code):
+                    resolved_code = resolved_from_code
 
             if resolved_code and self.validate_stock_code(resolved_code):
                 signal.stock_code = resolved_code
+                signal.stock_name = resolved_name
                 signal.validated = True
                 signal.validation_source = (
                     self.settings.stock_validation_provider or "local"
                 )
-                valid_signals.append(signal)
+                
+                # Check for duplicates based on code
+                if resolved_code in deduped:
+                    existing_sig = deduped[resolved_code]
+                    if getattr(existing_sig, "confidence", 0) < getattr(signal, "confidence", 0):
+                        new_reason = existing_sig.reasoning + " | " + signal.reasoning if existing_sig.reasoning != signal.reasoning else signal.reasoning
+                        signal.reasoning = new_reason
+                        deduped[resolved_code] = signal
+                    else:
+                        new_reason = existing_sig.reasoning + " | " + signal.reasoning if existing_sig.reasoning != signal.reasoning else existing_sig.reasoning
+                        existing_sig.reasoning = new_reason
+                else:
+                    deduped[resolved_code] = signal
             else:
                 self.logger.warning(
                     f"Invalid or unresolvable stock: code='{signal.stock_code}' name='{signal.stock_name}'"
@@ -360,6 +425,8 @@ class StockValidator(LoggerMixin):
                     self.settings.stock_validation_provider or "local"
                 )
                 dropped_count += 1
+
+        valid_signals = list(deduped.values())
 
         if dropped_count:
             self.logger.info("Dropped %s invalid signals during validation", dropped_count)

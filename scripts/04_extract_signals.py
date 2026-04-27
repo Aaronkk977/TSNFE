@@ -275,6 +275,15 @@ def main() -> int:
                 video_id=video_id,
                 analyst_name=analyst_name,
             )
+
+            for sig in analysis.signals:
+                if getattr(sig, "stock_name", None):
+                    sig.stock_name = _convert_to_traditional(sig.stock_name)
+                if getattr(sig, "reasoning", None):
+                    sig.reasoning = _convert_to_traditional(sig.reasoning)
+                if getattr(sig, "label_reason", None):
+                    sig.label_reason = _convert_to_traditional(sig.label_reason)
+
             if settings.validate_stock_codes:
                 analysis.signals = validator.resolve_signals(analysis.signals)
             analysis.video_view_count = view_count
