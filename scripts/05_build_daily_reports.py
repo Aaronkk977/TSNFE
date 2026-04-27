@@ -19,7 +19,7 @@ from tw_analyst_pipeline.extraction.schemas import VideoAnalysis, normalize_labe
 from tw_analyst_pipeline.utils.config import get_settings
 from tw_analyst_pipeline.utils.logging import setup_logging
 
-from etl_common import write_json
+from etl_common import TZ_TAIPEI, write_json
 
 
 LABEL_PRIORITY = {
@@ -226,7 +226,7 @@ def main() -> int:
     ordered_stocks, matrix, stock_display = _collect_matrix(analyses)
     stock_rankings = _build_stock_rankings(analyses)
 
-    now = datetime.now()
+    now = datetime.now(TZ_TAIPEI)
     timestamp = now.strftime("%Y%m%d_%H%M%S")
     out_dir = settings.data_reports_dir / subfolder / args.target_date
     out_dir.mkdir(parents=True, exist_ok=True)

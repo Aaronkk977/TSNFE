@@ -19,7 +19,7 @@ from tw_analyst_pipeline.utils.logging import setup_logging
 from tw_analyst_pipeline.youtube.downloader import AudioDownloader
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from etl_common import read_json, write_json
+from etl_common import TZ_TAIPEI, read_json, write_json
 
 
 def _resolve_youtube_cookie_path(settings) -> Optional[Path]:
@@ -59,7 +59,7 @@ def _current_date_folder(published_at: Optional[str] = None) -> str:
             return dt.astimezone(tz_taipei).strftime("%Y-%m-%d")
         except Exception:
             pass
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.now(TZ_TAIPEI).strftime("%Y-%m-%d")
 
 
 def _save_transcript_result(settings, transcript_result: TranscriptResult, item: dict) -> Path:
@@ -320,9 +320,10 @@ def main() -> int:
         except Exception as e:
             print(f"[ERROR] Transcription failed for {video_id}: {e}")
             outputs.append({**item, "status": "transcribe_failed", "error": str(e)})
+            _update_registry(settings, video_id, {"status": "transcribe_failed"})
 
     output_payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(TZ_TAIPEI).isoformat(timespec="seconds"),
         "source_file": str(source_file),
         "count": len(outputs),
         "items": outputs,
@@ -335,7 +336,7 @@ def main() -> int:
     has_new_transcription = any(row.get("status") == "transcribed" for row in outputs)
     latest_file = settings.data_metadata_dir / "transcript_status_latest.json"
     if has_new_transcription:
-        run_tag = (args.run_tag or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_tag = (args.run_tag or "").strip() or datetime.now(TZ_TAIPEI).strftime("%Y%m%d_%H%M%S")
         out_file = settings.data_metadata_dir / f"transcript_status_{run_tag}.json"
         write_json(out_file, output_payload)
         print(f"[INFO] Transcript status saved: {out_file}")

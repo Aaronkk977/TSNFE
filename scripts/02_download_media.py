@@ -17,7 +17,7 @@ from tw_analyst_pipeline.utils.config import get_settings
 from tw_analyst_pipeline.utils.logging import setup_logging
 from tw_analyst_pipeline.youtube.downloader import AudioDownloader
 
-from etl_common import read_json, write_json
+from etl_common import TZ_TAIPEI, read_json, write_json
 
 
 def _load_pending_items(settings, input_file: str | None) -> list:
@@ -244,10 +244,10 @@ def main() -> int:
             results.append({**item, "status": "download_failed", "audio_path": None, "error": str(e)})
             _update_registry(settings, video_id, {"status": "download_failed"})
 
-    run_tag = (args.run_tag or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_tag = (args.run_tag or "").strip() or datetime.now(TZ_TAIPEI).strftime("%Y%m%d_%H%M%S")
     out_file = settings.data_metadata_dir / f"download_status_{run_tag}.json"
     output_payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(TZ_TAIPEI).isoformat(timespec="seconds"),
         "source_file": str(source_file),
         "count": len(results),
         "downloaded_count": downloaded_count,

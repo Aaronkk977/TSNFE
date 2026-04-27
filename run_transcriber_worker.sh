@@ -1,5 +1,6 @@
 #!/bin/bash
 export PIPELINE_OUTPUT_SUBFOLDER=history
+export CUDA_VISIBLE_DEVICES=4
 RUN_TAG=$(date +%Y%m%d_%H%M%S)
 
 echo "========== [Worker 2] Transcriber Started =========="

@@ -16,7 +16,7 @@ from tw_analyst_pipeline.pipeline.orchestrator import SignalPipeline
 from tw_analyst_pipeline.utils.config import get_pipeline_config, get_settings
 from tw_analyst_pipeline.utils.logging import setup_logging
 
-from etl_common import latest_by_pattern, read_json, write_json
+from etl_common import TZ_TAIPEI, latest_by_pattern, read_json, write_json
 
 
 def _load_source_file(settings, input_file: str | None) -> Path:
@@ -147,10 +147,10 @@ def main() -> int:
         except Exception as e:
             results.append({**item, "status": "extract_failed", "error": str(e)})
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(TZ_TAIPEI).strftime("%Y%m%d_%H%M%S")
     out_file = settings.data_metadata_dir / f"signal_status_{timestamp}.json"
     output_payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(TZ_TAIPEI).isoformat(timespec="seconds"),
         "source_file": str(source_file),
         "count": len(results),
         "success_count": ok_count,

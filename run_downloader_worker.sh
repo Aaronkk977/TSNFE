@@ -1,7 +1,7 @@
 #!/bin/bash
 export PIPELINE_OUTPUT_SUBFOLDER=history
-START_DATE=2025-09-01
-END_DATE=2025-10-31
+START_DATE=2025-07-01
+END_DATE=2025-08-31
 RUN_TAG=$(date +%Y%m%d_%H%M%S)
 
 echo "========== [Worker 1] Downloader Started =========="

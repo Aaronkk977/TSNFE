@@ -182,6 +182,3 @@ TSNFE/
 下載完所有語音檔後 可以在檔案裡標記 讓transcriber知道可以停下來 而不是while loop永不停
 有時候文字轉錄的太爛 我會把檔案刪掉 能不能在哪個環節讓transcriber可以去例行偵測 更新狀態
 
-中斷後重新 downloader 顯示 [INFO] Total pending videos: 20 transcriber卻抓不到
-刪除 pending video 儲列 也不用刪除語音檔 工作站空間夠
-現在下載好語音檔還是會去yt下載 只是不會轉檔webm->wav而已 重新撰寫檢查機制

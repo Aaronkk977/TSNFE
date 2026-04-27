@@ -31,7 +31,6 @@ tenacity>=8.2.3
 loguru>=0.7.0
 pyyaml>=6.0
 requests>=2.31.0
-playwright>=1.46.0
 
 # Machine Learning & Data Processing
 pandas>=2.0.0
@@ -48,3 +47,6 @@ autoawq>=0.2.0
 # Install manually after torch with:
 #   pip install flash-attn --no-build-isolation
 yfinance>=0.2.31
+
+opencc-python-reimplemented
+vllm

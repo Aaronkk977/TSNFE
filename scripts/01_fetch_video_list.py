@@ -135,7 +135,7 @@ def main() -> int:
 
     write_json(registry_path, registry)
 
-    now = datetime.now()
+    now = datetime.now(TZ_TAIPEI)
     tag = sanitize_date_tag(folder_date)
     output = settings.data_metadata_dir / f"pending_videos_{tag}.json"
 

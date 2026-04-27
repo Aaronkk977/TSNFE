@@ -1,5 +1,6 @@
 import os
 import math 
+import opencc
 """
 Whisper transcription engine using faster-whisper
 Converts audio to text with GPU acceleration
@@ -115,15 +116,19 @@ class WhisperTranscriber(LoggerMixin):
             },
         )
 
+        converter = opencc.OpenCC('s2twp')
+
         segment_list = []
         full_text = []
 
         for segment in segments:
 
-            if hasattr(segment, "avg_logprob"):
-                conf = math.exp(segment.avg_logprob)
-            else:
-                conf = 0.0
+            # if hasattr(segment, "avg_logprob"):
+            #     conf = math.exp(segment.avg_logprob)
+            # else:
+            #     conf = 0.0
+
+            segment.text = converter.convert(segment.text)
 
             segment_list.append({
                 "id": segment.id,
