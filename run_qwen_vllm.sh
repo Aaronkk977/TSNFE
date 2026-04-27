@@ -7,8 +7,8 @@ source /data1/yclin/miniconda3/bin/activate tw-analyst
 CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-14B-Instruct-AWQ \
   --quantization awq \
-  --gpu-memory-utilization 0.85 \
-  --max-model-len 32768 \
+  --gpu-memory-utilization 0.80 \
+  --max-model-len 8192 \
   --port 8000 \
   --api-key "sk-hello-qwen-xyz" \
   --enable-auto-tool-choice \

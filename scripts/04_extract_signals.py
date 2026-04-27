@@ -5,37 +5,49 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from tw_analyst_pipeline.extraction.schemas import TranscriptResult
-from tw_analyst_pipeline.pipeline.orchestrator import SignalPipeline
+import opencc
+
+from tw_analyst_pipeline.extraction.llm_client import LLMExtractorFactory
+from tw_analyst_pipeline.extraction.schemas import (
+    RecommendationFeature,
+    RecommendationStock,
+    TranscriptResult,
+    VideoAnalysis,
+    normalize_label,
+)
+from tw_analyst_pipeline.stock_data.validators import StockValidator
 from tw_analyst_pipeline.utils.config import get_pipeline_config, get_settings
 from tw_analyst_pipeline.utils.logging import setup_logging
 
 from etl_common import TZ_TAIPEI, latest_by_pattern, read_json, write_json
 
 
-def _load_source_file(settings, input_file: str | None) -> Path:
+def _load_items(settings, input_file: str | None) -> list:
     if input_file:
-        path = Path(input_file)
-        if not path.exists():
-            raise FileNotFoundError(f"Input file not found: {path}")
-        return path
-
-    candidates = [
-        latest_by_pattern(settings.data_metadata_dir, "transcript_status_*.json"),
-        latest_by_pattern(settings.data_metadata_dir, "pending_videos_*.json"),
-        settings.data_metadata_dir / "transcript_status_latest.json",
-        settings.data_metadata_dir / "pending_videos_latest.json",
-    ]
-    for path in candidates:
-        if path and path.exists():
-            return path
-    raise FileNotFoundError("No input metadata JSON found for extraction stage")
+        return read_json(Path(input_file)).get("items", [])
+    
+    registry_path = settings.data_metadata_dir / "video_registry.json"
+    if registry_path.exists():
+        import json
+        with open(registry_path, "r", encoding="utf-8") as f:
+            registry = json.load(f)
+        
+        items = [
+            v
+            for k, v in registry.items()
+            if v.get("status") in ("transcribed", "extract_failed")
+        ]
+        return items
+        
+    return []
 
 
 def _load_latest_transcript_text(settings, video_id: str) -> str:
@@ -57,6 +69,111 @@ def _load_latest_transcript_text(settings, video_id: str) -> str:
     return transcript.text
 
 
+def _get_existing_signal(settings, video_id: str) -> Path | None:
+    pattern = f"**/{video_id}_*.json"
+    candidates = list(settings.data_signals_dir.glob(pattern))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
+
+def _convert_to_traditional(text: str) -> str:
+    converter = opencc.OpenCC("s2twp")
+    return converter.convert(text or "")
+
+
+def _action_to_label(action) -> str:
+    action_value = getattr(action, "value", action)
+    return {
+        "buy": "買進",
+        "sell": "賣出",
+        "hold": "中立",
+        "unknown": "中立",
+    }.get(str(action_value).strip().lower(), "")
+
+
+def _update_registry(settings, video_id: str, updates: dict) -> None:
+    registry_path = settings.data_metadata_dir / "video_registry.json"
+    if not registry_path.exists():
+        return
+
+    try:
+        with open(registry_path, "r", encoding="utf-8") as f:
+            registry = json.load(f)
+
+        if video_id in registry:
+            registry[video_id].update(updates)
+            write_json(registry_path, registry)
+    except Exception as e:
+        print(f"[ERROR] Failed to update registry for {video_id}: {e}")
+
+
+def _build_recommendation_feature(analysis: VideoAnalysis) -> RecommendationFeature:
+    recommended = []
+    for signal in analysis.signals:
+        action_label = _action_to_label(signal.action)
+        stock_label = action_label or signal.normalized_label or normalize_label(signal.implied_label)
+        recommended.append(
+            RecommendationStock(
+                stock_code=signal.stock_code,
+                stock_name=signal.stock_name,
+                label=stock_label,
+            )
+        )
+
+    return RecommendationFeature(
+        timestamp=analysis.processed_at,
+        view_count=analysis.video_view_count or 0,
+        recommended_stocks=recommended,
+    )
+
+
+def _save_analysis(settings, analysis: VideoAnalysis) -> Path:
+    folder_date = analysis.processed_at
+    if analysis.video_published_at:
+        try:
+            published_at = analysis.video_published_at.strip()
+            if published_at.endswith("+00:00Z"):
+                published_at = published_at[:-1]
+            elif published_at.endswith("Z"):
+                published_at = published_at[:-1]
+            dt = datetime.fromisoformat(published_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            folder_date = dt.astimezone(TZ_TAIPEI)
+        except Exception:
+            pass
+
+    output_dir = settings.data_signals_dir / os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "history") / folder_date.strftime("%Y-%m-%d")
+    output_file = output_dir / f"{analysis.video_id}_{analysis.processed_at.strftime('%Y%m%d_%H%M%S')}.json"
+
+    data = {
+        "video_id": analysis.video_id,
+        "analyst_name": analysis.analyst_name,
+        "signals": [sig.model_dump(mode="json", exclude_none=True) for sig in analysis.signals],
+        "processed_at": analysis.processed_at.isoformat(),
+    }
+    optional_fields = {
+        "market_outlook": analysis.market_outlook,
+        "processing_duration_seconds": analysis.processing_duration_seconds,
+        "transcript_length_chars": analysis.transcript_length_chars,
+        "video_view_count": analysis.video_view_count,
+        "video_published_at": analysis.video_published_at,
+        "recommendation_feature": (
+            analysis.recommendation_feature.model_dump(mode="json", exclude_none=True)
+            if analysis.recommendation_feature
+            else None
+        ),
+    }
+    data.update({key: value for key, value in optional_fields.items() if value is not None})
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return output_file
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="ETL-04 extract signals from transcript")
     parser.add_argument("--input", type=str, default=None, help="transcript_status or pending_videos JSON path")
@@ -70,6 +187,7 @@ def main() -> int:
     parser.add_argument("--llm-model", type=str, default=None)
     parser.add_argument("--llm-temperature", type=float, default=None)
     parser.add_argument("--llm-max-tokens", type=int, default=None)
+    parser.add_argument("--force", action="store_true", help="Force extraction even if already extracted")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
     args = parser.parse_args()
 
@@ -102,13 +220,27 @@ def main() -> int:
             pass
 
     pipeline_config = get_pipeline_config()
-    pipeline = SignalPipeline(settings, pipeline_config)
+    settings.stock_validation_provider = (
+        pipeline_config.get("stock_data.validation_provider") or settings.stock_validation_provider
+    )
+    llm_extractor = LLMExtractorFactory.create(settings, pipeline_config)
+    validator = StockValidator(settings)
 
-    source_file = _load_source_file(settings, args.input)
-    payload = read_json(source_file)
-    items = payload.get("items", []) if isinstance(payload, dict) else payload
+    source_file = Path(args.input) if args.input else settings.data_metadata_dir / "video_registry.json"
+    items = _load_items(settings, args.input)
     if not isinstance(items, list):
-        raise ValueError("Invalid source JSON: expected list or payload.items list")
+        items = []
+        
+    if not args.force:
+        unextracted = []
+        for item in items:
+            vid = str(item.get("video_id", "")).strip()
+            if vid and not _get_existing_signal(settings, vid):
+                unextracted.append(item)
+            elif not vid:
+                unextracted.append(item)
+        items = unextracted
+        
     if args.limit > 0:
         items = items[: args.limit]
 
@@ -120,21 +252,38 @@ def main() -> int:
         if not video_id:
             results.append({**item, "status": "invalid", "error": "missing video_id"})
             continue
+            
+        if not args.force:
+            existing_signal = _get_existing_signal(settings, video_id)
+            if existing_signal:
+                print(f"[INFO] Signal already exists for {video_id}, skipping...")
+                results.append({**item, "status": "extracted", "skipped": True})
+                # Include them in ok_count so they don't look like failures
+                ok_count += 1
+                continue
 
         analyst_name = item.get("analyst_name")
         view_count = item.get("view_count")
         published_at = item.get("published_at")
 
         try:
+            start_time = time.time()
             transcript_text = _load_latest_transcript_text(settings, video_id)
-            analysis = pipeline.process_transcript(
+            transcript_text = _convert_to_traditional(transcript_text)
+            analysis = llm_extractor.extract_signals(
                 transcript=transcript_text,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                video_view_count=view_count,
-                video_published_at=published_at,
-                save_result=True,
             )
+            if settings.validate_stock_codes:
+                analysis.signals = validator.resolve_signals(analysis.signals)
+            analysis.video_view_count = view_count
+            analysis.video_published_at = published_at
+            analysis.transcript_length_chars = len(transcript_text)
+            analysis.recommendation_feature = _build_recommendation_feature(analysis)
+            analysis.processing_duration_seconds = time.time() - start_time
+            signal_path = _save_analysis(settings, analysis)
+            _update_registry(settings, video_id, {"status": "signals_extracted", "signal_path": str(signal_path)})
             ok_count += 1
             results.append(
                 {
@@ -145,6 +294,7 @@ def main() -> int:
                 }
             )
         except Exception as e:
+            _update_registry(settings, video_id, {"status": "extract_failed"})
             results.append({**item, "status": "extract_failed", "error": str(e)})
 
     timestamp = datetime.now(TZ_TAIPEI).strftime("%Y%m%d_%H%M%S")

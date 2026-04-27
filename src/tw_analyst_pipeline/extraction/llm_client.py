@@ -1333,10 +1333,20 @@ class QwenOpenAIExtractor(OpenAIExtractor):
         BaseLLMExtractor.__init__(self, settings, pipeline_config)
         import instructor
         from openai import OpenAI
-        self.client = instructor.from_openai(
-            OpenAI(base_url="http://0.0.0.0:8000/v1", api_key="empty")
+        api_key = (
+            os.getenv("OPENAI_API_KEY")
+            or os.getenv("QWEN_API_KEY")
+            or "empty"
         )
-        self.logger.info("Local Qwen vLLM OpenAI client initialized via http://0.0.0.0:8000/v1")
+        base_url = (
+            os.getenv("OPENAI_API_BASE")
+            or os.getenv("OPENAI_BASE_URL")
+            or "http://0.0.0.0:8000/v1"
+        )
+        self.client = instructor.from_openai(
+            OpenAI(base_url=base_url, api_key=api_key)
+        )
+        self.logger.info(f"Local Qwen vLLM OpenAI client initialized via {base_url}")
 
     def extract_signals(
         self,

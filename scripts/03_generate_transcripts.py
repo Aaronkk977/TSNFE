@@ -191,7 +191,11 @@ def _load_items(settings, input_file: str | None) -> list:
         with open(registry_path, "r", encoding="utf-8") as f:
             registry = json.load(f)
         
-        items = [v for k, v in registry.items() if v.get("status") in ("audio_ready", "cc_ready")]
+        items = [
+            v
+            for k, v in registry.items()
+            if v.get("status") in ("audio_ready", "cc_ready", "transcribe_failed")
+        ]
         return items
         
     return []

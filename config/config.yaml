@@ -169,7 +169,7 @@ extraction:
 stock_data:
   # Enable validation against official stock list
   validate_codes: false
-  validation_provider: "fugle"      # fugle, local
+  validation_provider: "local"      # fugle, local
   fugle_base_url: "https://api.fugle.tw/marketdata/v1.0"
   
   # Stock code format validation

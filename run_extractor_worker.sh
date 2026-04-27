@@ -3,6 +3,7 @@ source local/conda_commands.sh
 source /data1/yclin/miniconda3/bin/activate tw-analyst
 
 export PIPELINE_OUTPUT_SUBFOLDER=history
+export CUDA_VISIBLE_DEVICES=4   
 RUN_TAG=$(date +%Y%m%d_%H%M%S)
 
 echo "========== [Worker 3] Extractor Started =========="

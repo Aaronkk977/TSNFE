@@ -390,7 +390,14 @@ class SignalPipeline(LoggerMixin):
         folder_date = analysis.processed_at
         if analysis.video_published_at:
             try:
-                dt = datetime.fromisoformat(analysis.video_published_at.replace("Z", "+00:00"))
+                published_at = analysis.video_published_at.strip()
+                if published_at.endswith("+00:00Z"):
+                    published_at = published_at[:-1]
+                elif published_at.endswith("Z"):
+                    published_at = published_at[:-1]
+                dt = datetime.fromisoformat(published_at)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
                 tz_taipei = timezone(timedelta(hours=8))
                 folder_date = dt.astimezone(tz_taipei)
             except Exception:
@@ -471,7 +478,14 @@ class SignalPipeline(LoggerMixin):
     def _build_recommendation_feature(self, analysis: VideoAnalysis) -> RecommendationFeature:
         recommended = []
         for signal in analysis.signals:
-            stock_label = signal.normalized_label or normalize_label(signal.implied_label)
+            action_value = getattr(signal.action, "value", signal.action)
+            action_label = {
+                "buy": "買進",
+                "sell": "賣出",
+                "hold": "中立",
+                "unknown": "中立",
+            }.get(str(action_value).strip().lower(), "")
+            stock_label = action_label or signal.normalized_label or normalize_label(signal.implied_label)
             recommended.append(
                 RecommendationStock(
                     stock_code=signal.stock_code,
