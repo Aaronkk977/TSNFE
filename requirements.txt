@@ -2,7 +2,7 @@
 # Generated from pyproject.toml
 
 # YouTube & Download
-yt-dlp>=2024.0.0
+yt-dlp>=2026.0.0
 youtube-transcript-api<1.0.0
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
@@ -12,16 +12,16 @@ google-auth-oauthlib>=1.0.0
 # Speech-to-Text
 faster-whisper>=1.0.0
 # GPU runtime for faster-whisper (CUDA 12)
-nvidia-cublas-cu12>=12.9.2; platform_system=="Linux" and platform_machine=="x86_64"
-nvidia-cudnn-cu12>=9.21.0; platform_system=="Linux" and platform_machine=="x86_64"
+# nvidia-cublas-cu12>=12.9.2; platform_system=="Linux" and platform_machine=="x86_64"
+# nvidia-cudnn-cu12>=9.21.0; platform_system=="Linux" and platform_machine=="x86_64"
 
-# LLM APIs
+# # LLM APIs
 openai>=1.12.0
-anthropic>=0.18.0
+# anthropic>=0.18.0
 google-genai>=0.7.0
-instructor>=0.5.0
+# instructor>=0.5.0
 
-# Data Validation & Configuration
+# # Data Validation & Configuration
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
@@ -32,22 +32,23 @@ loguru>=0.7.0
 pyyaml>=6.0
 requests>=2.31.0
 
-# Machine Learning & Data Processing
-pandas>=2.0.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
-xgboost>=2.0.0
-torch>=2.0.0
-transformers>=4.45.0
-accelerate>=1.0.0
-safetensors>=0.4.0
+# # Machine Learning & Data Processing
+# pandas>=2.0.0
+# numpy>=1.24.0
+# scikit-learn>=1.3.0
+# xgboost>=2.0.0
+# torch>=2.0.0
+# transformers>=4.45.0
+# accelerate>=1.0.0
+# safetensors>=0.4.0
 huggingface_hub>=0.24.0
-autoawq>=0.2.0
-# Optional GPU acceleration package:
-# Install manually after torch with:
-#   pip install flash-attn --no-build-isolation
-yfinance>=0.2.31
+# autoawq>=0.2.0
+# # Optional GPU acceleration package:
+# # Install manually after torch with:
+# #   pip install flash-attn --no-build-isolation
+# yfinance>=0.2.31
 
-opencc-python-reimplemented
-vllmpypinyin>=0.55.0
+# opencc-python-reimplemented
+# # vllmpypinyin>=0.55.0
 opencc>=1.1.9
+nodejs

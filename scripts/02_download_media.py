@@ -72,17 +72,27 @@ def _has_youtube_cc(video_id: str, settings) -> bool:
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         languages = ["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"]
-        
-        # 1. 取得該影片的字幕清單 (不依賴 cookie)
-        api = YouTubeTranscriptApi()
-        transcript_list = api.list(video_id)
-        
-        # 2. 嘗試找尋我們支援的語言
+
+        # youtube_transcript_api has API differences across versions:
+        # - old: YouTubeTranscriptApi().list(video_id)
+        # - new: YouTubeTranscriptApi.list_transcripts(video_id)
+        transcript_list = None
+        if hasattr(YouTubeTranscriptApi, "list_transcripts"):
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        else:
+            api = YouTubeTranscriptApi()
+            if hasattr(api, "list"):
+                transcript_list = api.list(video_id)
+            elif hasattr(api, "list_transcripts"):
+                transcript_list = api.list_transcripts(video_id)
+            else:
+                raise AttributeError("youtube_transcript_api does not expose transcript listing API")
+
         transcript_list.find_transcript(languages)
         return True
     except Exception as e:
         # 如果真的找不到字幕，或是被擋，印出具體原因
-        print(f"[WARN] CC check failed/missing for {video_id}: {type(e).__name__}")
+        print(f"[WARN] CC check failed/missing for {video_id}: {type(e).__name__} - {e}")
         return False
 
 
@@ -114,15 +124,26 @@ def _parse_published_datetime(published_at: str | None) -> datetime | None:
 def _in_date_window(published_at: str | None, start_date: str | None, end_date: str | None) -> bool:
     if not start_date and not end_date:
         return True
-    dt = _parse_published_datetime(published_at)
-    if dt is None:
-        return False
 
-    tz_taipei = timezone(timedelta(hours=8))
-    local_date = dt.astimezone(tz_taipei).date()
-    if start_date and local_date < datetime.strptime(start_date, "%Y-%m-%d").date():
+    # Keep window filtering aligned with the source metadata calendar date.
+    # Do not convert to Taipei first, otherwise UTC boundary videos
+    # (e.g. 2025-04-30T16:30:00Z) become next-day and may leak into May.
+    source_date = None
+    text = str(published_at or "").strip()
+    if len(text) >= 10:
+        try:
+            source_date = datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except ValueError:
+            source_date = None
+    if source_date is None:
+        dt = _parse_published_datetime(published_at)
+        if dt is None:
+            return False
+        source_date = dt.date()
+
+    if start_date and source_date < datetime.strptime(start_date, "%Y-%m-%d").date():
         return False
-    if end_date and local_date > datetime.strptime(end_date, "%Y-%m-%d").date():
+    if end_date and source_date > datetime.strptime(end_date, "%Y-%m-%d").date():
         return False
     return True
 
@@ -134,6 +155,7 @@ def main() -> int:
     parser.add_argument("--max-wait-seconds", type=float, default=20.0)
     parser.add_argument("--start-date", type=str, default=None, help="YYYY-MM-DD, inclusive")
     parser.add_argument("--end-date", type=str, default=None, help="YYYY-MM-DD, inclusive")
+    parser.add_argument("--min-views", type=int, default=3000, help="Minimum view count to download")
     parser.add_argument("--run-tag", type=str, default=None, help="Stable tag for status filename")
     parser.add_argument(
         "--max-audio-cache",
@@ -184,6 +206,7 @@ def main() -> int:
         video_id = str(item.get("video_id", "")).strip()
         video_url = str(item.get("video_url", "")).strip()
         published_at = item.get("published_at")
+        view_count = item.get("view_count")
 
         if not video_url and video_id:
             video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -206,6 +229,14 @@ def main() -> int:
             )
             _update_registry(settings, video_id, {"status": "skipped_out_of_window"}) # <--- 關鍵：清出佇列
             continue
+
+        if args.min_views > 0:
+            vc = int(view_count) if view_count else 0
+            if vc < args.min_views:
+                print(f"[WARN] Skipped {video_id} - view count is too low ({vc} < {args.min_views})")
+                results.append({**item, "status": "skipped_low_views"})
+                _update_registry(settings, video_id, {"status": "skipped_low_views"})
+                continue
 
         if _has_youtube_cc(video_id, settings):
             results.append({**item, "status": "cc_ready", "audio_path": None})
