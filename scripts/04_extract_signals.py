@@ -284,8 +284,25 @@ def main() -> int:
                 if getattr(sig, "label_reason", None):
                     sig.label_reason = _convert_to_traditional(sig.label_reason)
 
-            if settings.validate_stock_codes:
-                analysis.signals = validator.resolve_signals(analysis.signals)
+            # Deduplicate/combine contradictory signals by exact code (or name if code is absent)
+            # but do NOT correct or drop them yet so we keep the raw output.
+            from collections import OrderedDict
+            dedup_signals = OrderedDict()
+            for sig in analysis.signals:
+                key = str(sig.stock_code).strip() if sig.stock_code else str(sig.stock_name).strip()
+                if key in dedup_signals:
+                    existing_sig = dedup_signals[key]
+                    if getattr(existing_sig, "confidence", 0) < getattr(sig, "confidence", 0):
+                        new_reason = existing_sig.reasoning + " | " + sig.reasoning if existing_sig.reasoning != sig.reasoning else sig.reasoning
+                        sig.reasoning = new_reason
+                        dedup_signals[key] = sig
+                    else:
+                        new_reason = existing_sig.reasoning + " | " + sig.reasoning if existing_sig.reasoning != sig.reasoning else existing_sig.reasoning
+                        existing_sig.reasoning = new_reason
+                else:
+                    dedup_signals[key] = sig
+            analysis.signals = list(dedup_signals.values())
+
             analysis.video_view_count = view_count
             analysis.video_published_at = published_at
             analysis.transcript_length_chars = len(transcript_text)

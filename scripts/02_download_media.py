@@ -72,33 +72,16 @@ def _has_youtube_cc(video_id: str, settings) -> bool:
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         languages = ["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"]
-        items = None
-        cookie_path = _resolve_youtube_cookie_path(settings)
-        if cookie_path:
-            try:
-                if hasattr(YouTubeTranscriptApi, "get_transcript"):
-                    items = YouTubeTranscriptApi.get_transcript(
-                        video_id,
-                        languages=languages,
-                        cookies=str(cookie_path),
-                    )
-                    print(f"[INFO] CC check using cookies for {video_id}: {cookie_path}")
-                else:
-                    print(
-                        "[WARN] youtube-transcript-api has no get_transcript(); "
-                        "fallback to fetch() without explicit cookies"
-                    )
-            except (TypeError, AttributeError):
-                print(
-                    "[WARN] youtube-transcript-api cannot use cookies in get_transcript; "
-                    "fallback to fetch()"
-                )
-
-        if items is None:
-            api = YouTubeTranscriptApi()
-            items = api.fetch(video_id, languages=languages)
-        return len(items) > 0
-    except Exception:
+        
+        # 1. 取得該影片的字幕清單 (不依賴 cookie)
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # 2. 嘗試找尋我們支援的語言
+        transcript_list.find_transcript(languages)
+        return True
+    except Exception as e:
+        # 如果真的找不到字幕，或是被擋，印出具體原因
+        print(f"[WARN] CC check failed/missing for {video_id}: {type(e).__name__}")
         return False
 
 
@@ -201,10 +184,17 @@ def main() -> int:
         video_url = str(item.get("video_url", "")).strip()
         published_at = item.get("published_at")
 
+        if not video_url and video_id:
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+
         if not video_id or not video_url:
+            print(f"[WARN] 略過 {video_id} - 缺少 ID 或 URL")
             results.append({**item, "status": "invalid", "error": "missing video_id/video_url"})
+            _update_registry(settings, video_id, {"status": "invalid"}) # <--- 關鍵：清出佇列
             continue
+
         if not _in_date_window(published_at, args.start_date, args.end_date):
+            print(f"[WARN] 略過 {video_id} - 不在日期範圍內 ({published_at})")
             results.append(
                 {
                     **item,
@@ -213,6 +203,7 @@ def main() -> int:
                     "error": "published_at not in requested date window",
                 }
             )
+            _update_registry(settings, video_id, {"status": "skipped_out_of_window"}) # <--- 關鍵：清出佇列
             continue
 
         if _has_youtube_cc(video_id, settings):
@@ -220,6 +211,11 @@ def main() -> int:
             _update_registry(settings, video_id, {"status": "cc_ready"})
             print(f"[INFO] Skipping download for {video_id}: YouTube CC is available.")
             continue
+
+        # print(f"[WARN] 略過 {video_id} - 沒有 CC 字幕，且目前環境無法安全下載音檔")
+        # results.append({**item, "status": "skipped_no_cc", "audio_path": None})
+        # _update_registry(settings, video_id, {"status": "skipped_no_cc"})
+        # continue
 
         existing_audio = downloader._find_latest_audio_file(video_id)
         if existing_audio:

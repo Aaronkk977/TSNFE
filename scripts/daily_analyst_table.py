@@ -574,6 +574,12 @@ def main() -> int:
                 }
             )
 
+    if settings.validate_stock_codes:
+        from tw_analyst_pipeline.stock_data.validators import StockValidator
+        validator = StockValidator(settings)
+        for analysis in analyses:
+            analysis.signals = validator.resolve_signals(analysis.signals)
+
     ordered_stocks, matrix, stock_display = _collect_matrix(analyses)
     stock_rankings = _build_stock_rankings(analyses)
 

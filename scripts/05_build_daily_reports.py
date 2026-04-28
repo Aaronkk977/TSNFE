@@ -16,6 +16,7 @@ from typing import Dict, List, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from tw_analyst_pipeline.extraction.schemas import VideoAnalysis, normalize_label
+from tw_analyst_pipeline.stock_data.validators import StockValidator
 from tw_analyst_pipeline.utils.config import get_settings
 from tw_analyst_pipeline.utils.logging import setup_logging
 
@@ -222,6 +223,11 @@ def main() -> int:
     if not analyses:
         print(f"[WARN] No signal json found under {signal_dir}")
         return 1
+
+    if settings.validate_stock_codes:
+        validator = StockValidator(settings)
+        for analysis in analyses:
+            analysis.signals = validator.resolve_signals(analysis.signals)
 
     ordered_stocks, matrix, stock_display = _collect_matrix(analyses)
     stock_rankings = _build_stock_rankings(analyses)

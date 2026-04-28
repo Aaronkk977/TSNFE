@@ -7,9 +7,17 @@ Useful when a daily run is interrupted but partial signal files already exist.
 import argparse
 import csv
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from tw_analyst_pipeline.stock_data.validators import StockValidator
+from tw_analyst_pipeline.extraction.schemas import StockSignal
+from tw_analyst_pipeline.utils.config import get_settings
 
 
 LABEL_PRIORITY = {
@@ -180,6 +188,19 @@ def main() -> int:
     if not analyses:
         print("[INFO] No matching signal files found; table not generated.")
         return 0
+
+    settings = get_settings()
+    if settings.validate_stock_codes:
+        validator = StockValidator(settings)
+        for analysis in analyses:
+            sigs = []
+            for sig in analysis.get("signals", []):
+                try:
+                    sigs.append(StockSignal(**sig))
+                except Exception:
+                    continue
+            validated_sigs = validator.resolve_signals(sigs)
+            analysis["signals"] = [sig.model_dump(mode="json", exclude_none=True) for sig in validated_sigs]
 
     ordered_stocks, matrix, stock_display = _build_matrix(analyses)
 

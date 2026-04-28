@@ -10,12 +10,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
 import sys
+import time
+import random
 from typing import List, Optional
 from urllib.parse import unquote, urlparse
 
  
 import yt_dlp
 from urllib.error import HTTPError as HttpError
+from googleapiclient.discovery import build
 
 from ..utils.config import Settings
 from ..utils.logging import LoggerMixin
@@ -69,9 +72,18 @@ class YouTubeFetcher(LoggerMixin):
         self.youtube = None
         self._init_youtube_client()
 
+        self.api_key = settings.youtube_api_key 
+        self._init_youtube_client()
+
     def _init_youtube_client(self):
         # Keep this method for compatibility; channel/video fetch now uses yt-dlp.
-        self.youtube = None
+        api_key = self.settings.youtube_api_key
+        if api_key:
+            self.youtube = build("youtube", "v3", developerKey=api_key)
+            self.logger.info("YouTube Data API v3 client initialized.")
+        else:
+            self.youtube = None
+            self.logger.warning("No YouTube API Key found, official API features will be disabled.")
 
     @staticmethod
     def _detect_js_runtimes() -> dict:
@@ -147,131 +159,101 @@ class YouTubeFetcher(LoggerMixin):
         return dt.astimezone(timezone.utc)
 
     def get_channel_id_from_handle(self, handle: str) -> Optional[str]:
-        handle = handle.strip()
-        if not handle: return None
-        if not handle.startswith("http"):
-            handle = f"https://www.youtube.com/@{handle.lstrip('@')}"
+        handle = handle.strip().lstrip('@')
+        if not self.youtube:
+            return None
 
-        ydl_opts = {
-            **self._base_ydl_opts(),
-            'extract_flat': True,
-            'playlistend': 1,
-        }
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(handle, download=False)
-                channel_id = info.get('channel_id') or info.get('id')
-                if channel_id:
-                    self.logger.info(f"Found channel ID: {channel_id}")
-                    return channel_id
+            # 使用 forHandle 參數查詢
+            request = self.youtube.channels().list(
+                part="id",
+                forHandle=handle
+            )
+            response = request.execute()
+            items = response.get("items", [])
+            if items:
+                channel_id = items[0]["id"]
+                self.logger.info(f"Found channel ID via API: {channel_id}")
+                return channel_id
         except Exception as e:
-            self.logger.error(f"yt-dlp error fetching channel: {e}")
+            self.logger.error(f"API error fetching channel ID: {e}")
         return None
 
     def get_channel_videos(
         self, channel_id: str, max_results: int = 10, days_back: Optional[int] = 7,
         exclude_shorts: bool = False, min_duration_seconds: Optional[int] = None,
         published_after_dt: Optional[datetime] = None, published_before_dt: Optional[datetime] = None,
+        **kwargs
     ) -> List[VideoInfo]:
-        self.logger.info(f"Fetching videos from channel: {channel_id}")
+        if not self.youtube:
+            return []
+
+        # 核心秘技：將 Channel ID 轉換為 Uploads Playlist ID (UC 開頭轉 UU 開頭)
+        uploads_playlist_id = channel_id.replace("UC", "UU", 1)
+
+        # 處理日期邊界 (強制轉為 UTC 以利比對)
         if published_after_dt:
-            after_dt = self._as_utc_aware(published_after_dt)
+            after_dt = published_after_dt.astimezone(timezone.utc)
         elif days_back:
             after_dt = datetime.now(timezone.utc) - timedelta(days=days_back)
         else:
             after_dt = None
-            
-        before_dt = self._as_utc_aware(published_before_dt) if published_before_dt else None
-        url = f"https://www.youtube.com/channel/{channel_id}/videos"
-        ydl_opts = {
-            **self._base_ydl_opts(),
-            'extract_flat': True,
-            'playlistend': 2000 if published_after_dt else (max_results * 2), # Increased for historical fetch
-        }
+
+        before_dt = published_before_dt.astimezone(timezone.utc) if published_before_dt else None
+
+        self.logger.info(f"Fetching via Playlist (1 point/page) from: {channel_id}")
         videos = []
+        next_page_token = None
+        
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                entries = info.get('entries', [])
-                if before_dt and entries and entries[0].get('timestamp') is None:
-                    self.logger.info("Using binary search for date range (yt-dlp returned no timestamps)")
-                    low, high = 0, len(entries) - 1
-                    start_idx = 0
-                    def fetch_dt(idx):
-                        e = entries[idx]
-                        if not e: return None
-                        vid_url = f"https://www.youtube.com/watch?v={e.get('id')}"
-                        try:
-                            opts = {'quiet': True,
-            'no_warnings': True, 'extract_flat': 'in_playlist'}
-                            opts.update(self._base_ydl_opts())
-                             
-                            with yt_dlp.YoutubeDL(opts) as inner_ydl:
-                                d = inner_ydl.extract_info(vid_url, download=False)
-                                ts = d.get('timestamp')
-                                if ts:
-                                    return datetime.fromtimestamp(ts, tz=timezone.utc)
-                        except: pass
-                        return None
-                    
-                    while low <= high:
-                        mid = (low + high) // 2
-                        dt_val = fetch_dt(mid)
-                        if not dt_val:
-                            low = mid + 1
-                            continue
-                        if dt_val > before_dt:
-                            low = mid + 1
-                        else:
-                            start_idx = mid
-                            high = mid - 1
-                    entries = entries[start_idx:]
-                    self.logger.info(f"Skipped {start_idx} newer videos.")
+            while len(videos) < max_results:
+                # 使用只要 1 點的 playlistItems.list
+                request = self.youtube.playlistItems().list(
+                    part="snippet",
+                    playlistId=uploads_playlist_id,
+                    maxResults=50,
+                    pageToken=next_page_token
+                )
+                response = request.execute()
 
-                for entry in entries:
-                    if not entry: continue
-                    pub_timestamp = entry.get('timestamp')
-                    if pub_timestamp is None:
-                        # Extract the true timestamp to respect boundaries
-                        vid_url = f"https://www.youtube.com/watch?v={entry.get('id')}"
-                        try:
-                            opts = {'quiet': True,
-            'no_warnings': True, 'extract_flat': 'in_playlist'}
-                            opts.update(self._base_ydl_opts())
-                             
-                            with yt_dlp.YoutubeDL(opts) as inner_ydl:
-                                d = inner_ydl.extract_info(vid_url, download=False)
-                                pub_timestamp = d.get('timestamp')
-                        except:
-                            pass
-                    if pub_timestamp:
-                        dt = datetime.fromtimestamp(pub_timestamp, tz=timezone.utc)
-                        if after_dt and dt < after_dt: break
-                        if before_dt and dt > before_dt: continue
-                        pub_str = dt.isoformat() + "Z"
-                    else:
-                        pub_str = ""
+                for item in response.get("items", []):
+                    snippet = item["snippet"]
+                    pub_str = snippet["publishedAt"]
                     
-                    duration = entry.get('duration')
-                    if duration:
-                        if exclude_shorts and duration <= 180: continue
-                        if min_duration_seconds and duration <= min_duration_seconds: continue
+                    # 將 API 回傳的 ISO 時間字串轉為 datetime 物件來比較
+                    video_dt = datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
 
+                    # 1. 如果影片比我們要的「最舊時間」還老 -> 代表歷史回溯已經完成，直接煞車！
+                    if after_dt and video_dt < after_dt:
+                        self.logger.info("Reached videos older than target start_date. Stopping pagination.")
+                        return videos
+
+                    # 2. 如果影片比我們要的「最新時間」還新 -> 先跳過，繼續往歷史翻頁
+                    if before_dt and video_dt > before_dt:
+                        continue
+
+                    # 3. 在目標日期區間內，收錄！
+                    # 注意：playlistItems 回傳的 videoId 藏在 resourceId 裡面
                     videos.append(VideoInfo(
-                        video_id=entry.get('id'),
-                        title=entry.get('title'),
-                        description=entry.get('description', ''),
+                        video_id=snippet["resourceId"]["videoId"],
+                        title=snippet["title"],
+                        description=snippet["description"],
                         published_at=pub_str,
-                        channel_id=info.get('channel_id', channel_id),
-                        channel_title=info.get('uploader', ''),
-                        duration=str(duration) if duration else None,
-                        view_count=entry.get('view_count')
+                        channel_id=channel_id,
+                        channel_title=snippet["channelTitle"]
                     ))
+
                     if len(videos) >= max_results:
                         break
+
+                # 準備翻下一頁
+                next_page_token = response.get("nextPageToken")
+                if not next_page_token:
+                    break
+
         except Exception as e:
-            self.logger.error(f"yt-dlp error fetching videos: {e}")
-            
+            self.logger.error(f"API error fetching playlist items: {e}")
+
         return videos
 
     def get_video_details(self, video_ids: List[str]) -> List[VideoInfo]:

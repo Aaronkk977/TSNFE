@@ -1,8 +1,8 @@
 #!/bin/bashsource local/conda_commands.sh
 source /data1/yclin/miniconda3/bin/activate tw-analyst
 export PIPELINE_OUTPUT_SUBFOLDER=history
-START_DATE=2025-07-01
-END_DATE=2025-08-31
+START_DATE=2025-05-01
+END_DATE=2025-06-30
 RUN_TAG=$(date +%Y%m%d_%H%M%S)
 
 echo "========== [Worker 1] Downloader Started =========="
