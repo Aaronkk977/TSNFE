@@ -177,7 +177,7 @@ class GeminiTranscriber(LoggerMixin):
                         cookies=str(cookie_path),
                     )
                     self.logger.info(f"Fast-track using transcript cookies: {cookie_path}")
-                except TypeError:
+                except (TypeError, AttributeError):
                     # Backward compatibility for youtube-transcript-api versions
                     # that do not support cookies parameter in get_transcript.
                     self.logger.warning(

@@ -74,7 +74,8 @@ def _has_youtube_cc(video_id: str, settings) -> bool:
         languages = ["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"]
         
         # 1. 取得該影片的字幕清單 (不依賴 cookie)
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        api = YouTubeTranscriptApi()
+        transcript_list = api.list(video_id)
         
         # 2. 嘗試找尋我們支援的語言
         transcript_list.find_transcript(languages)

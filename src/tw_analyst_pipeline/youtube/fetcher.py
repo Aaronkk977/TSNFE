@@ -188,10 +188,8 @@ class YouTubeFetcher(LoggerMixin):
         if not self.youtube:
             return []
 
-        # 核心秘技：將 Channel ID 轉換為 Uploads Playlist ID (UC 開頭轉 UU 開頭)
         uploads_playlist_id = channel_id.replace("UC", "UU", 1)
 
-        # 處理日期邊界 (強制轉為 UTC 以利比對)
         if published_after_dt:
             after_dt = published_after_dt.astimezone(timezone.utc)
         elif days_back:
@@ -201,13 +199,13 @@ class YouTubeFetcher(LoggerMixin):
 
         before_dt = published_before_dt.astimezone(timezone.utc) if published_before_dt else None
 
-        self.logger.info(f"Fetching via Playlist (1 point/page) from: {channel_id}")
+        self.logger.info(f"Fetching via Playlist (2 points/page) from: {channel_id}")
         videos = []
         next_page_token = None
         
         try:
             while len(videos) < max_results:
-                # 使用只要 1 點的 playlistItems.list
+                # 1. 抓取基本清單 (消耗 1 點)
                 request = self.youtube.playlistItems().list(
                     part="snippet",
                     playlistId=uploads_playlist_id,
@@ -215,38 +213,78 @@ class YouTubeFetcher(LoggerMixin):
                     pageToken=next_page_token
                 )
                 response = request.execute()
+                items = response.get("items", [])
+                
+                if not items:
+                    break
 
-                for item in response.get("items", []):
+                # ======= 【新增：批次查詢補充資料 (消耗 1 點)】 =======
+                # 收集這 50 支影片的 ID
+                video_ids = [item["snippet"]["resourceId"]["videoId"] for item in items]
+                details_map = {}
+                
+                if video_ids:
+                    stats_req = self.youtube.videos().list(
+                        part="contentDetails,statistics",
+                        id=",".join(video_ids)
+                    )
+                    stats_res = stats_req.execute()
+                    for d in stats_res.get("items", []):
+                        details_map[d["id"]] = {
+                            "duration_iso": d["contentDetails"]["duration"], # 例如 PT15M33S
+                            "view_count": int(d.get("statistics", {}).get("viewCount", 0))
+                        }
+                # ========================================================
+
+                for item in items:
                     snippet = item["snippet"]
                     pub_str = snippet["publishedAt"]
-                    
-                    # 將 API 回傳的 ISO 時間字串轉為 datetime 物件來比較
+                    video_id = snippet["resourceId"]["videoId"]
                     video_dt = datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
 
-                    # 1. 如果影片比我們要的「最舊時間」還老 -> 代表歷史回溯已經完成，直接煞車！
                     if after_dt and video_dt < after_dt:
                         self.logger.info("Reached videos older than target start_date. Stopping pagination.")
                         return videos
-
-                    # 2. 如果影片比我們要的「最新時間」還新 -> 先跳過，繼續往歷史翻頁
                     if before_dt and video_dt > before_dt:
                         continue
 
-                    # 3. 在目標日期區間內，收錄！
-                    # 注意：playlistItems 回傳的 videoId 藏在 resourceId 裡面
+                    # 取出剛才查到的細節
+                    detail = details_map.get(video_id, {})
+                    duration_iso = detail.get("duration_iso", "")
+                    view_count = detail.get("view_count")
+
+                    # 將 ISO 格式 (PT1H2M3S) 轉成秒數
+                    duration_sec = 0
+                    if duration_iso:
+                        # 使用正則表達式解析 YouTube 的時間格式
+                        import re
+                        match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_iso)
+                        if match:
+                            h = int(match.group(1) or 0)
+                            m = int(match.group(2) or 0)
+                            s = int(match.group(3) or 0)
+                            duration_sec = h * 3600 + m * 60 + s
+
+                    # 執行原本的 Shorts 與長度過濾邏輯
+                    if exclude_shorts and duration_sec > 0 and duration_sec <= 180:
+                        continue
+                    if min_duration_seconds and duration_sec > 0 and duration_sec <= min_duration_seconds:
+                        continue
+
                     videos.append(VideoInfo(
-                        video_id=snippet["resourceId"]["videoId"],
+                        video_id=video_id,
                         title=snippet["title"],
                         description=snippet["description"],
                         published_at=pub_str,
                         channel_id=channel_id,
-                        channel_title=snippet["channelTitle"]
+                        channel_title=snippet["channelTitle"],
+                        duration=str(duration_sec) if duration_sec > 0 else None,
+                        view_count=view_count
                     ))
 
                     if len(videos) >= max_results:
                         break
 
-                # 準備翻下一頁
                 next_page_token = response.get("nextPageToken")
                 if not next_page_token:
                     break
