@@ -161,7 +161,14 @@ class WhisperTranscriber(LoggerMixin):
         self.logger.info(f"Whisper model loaded on {self.device}")
         return model
 
-    def transcribe(self, audio_path: Path, video_id: Optional[str] = None, published_at: Optional[str] = None) -> TranscriptResult:
+    def transcribe(
+        self,
+        audio_path: Path,
+        video_id: Optional[str] = None,
+        published_at: Optional[str] = None,
+        *,
+        persist_to_disk: bool = True,
+    ) -> TranscriptResult:
         """
         Transcribe audio file to text.
 
@@ -208,8 +215,8 @@ class WhisperTranscriber(LoggerMixin):
                 f"({len(result.text)} chars, {len(segment_list)} segments)"
             )
 
-            # Save to cache
-            self._save_transcript(result, published_at=published_at)
+            if persist_to_disk:
+                self._save_transcript(result, published_at=published_at)
 
             return result
 

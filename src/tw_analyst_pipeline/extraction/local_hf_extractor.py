@@ -130,6 +130,7 @@ class LocalHuggingFaceExtractor(BaseLLMExtractor):
         start_time = time.time()
 
         try:
+            transcript = self._prepare_transcript_for_extraction(transcript)
             should_chunk = self._should_chunk_text_model(self.model_id, section="extraction")
             chunking_config = self.config.get_chunking_config("extraction")
             chunk_size = int(chunking_config.get("chunk_size_chars", 2500) or 2500)

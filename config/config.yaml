@@ -68,8 +68,27 @@ youtube:
 # Transcription Configuration (Whisper/faster-whisper)
 # ============================================================================
 transcription:
-  provider: "whisper"                  # gemini, whisper
+  provider: "gemini"                  # gemini, whisper
   gemini_model: "gemini-2.5-flash"
+  # Audio→文字輸出上限；過低會把長直播逐字稿截斷（先前預設 8192 過短）
+  gemini_max_output_tokens: 65536
+  # 取樣（flash 仍可用）— frequency/presence penalty 在 gemini-2.5-flash 上 API 不支援，程式會自動略過
+  gemini_temperature: 0.0
+  gemini_top_p: 0.95
+  gemini_top_k: 64
+  # 僅在非 Flash 模型上生效；若手動加在 flash 上會 400，已內建重試略過
+  # gemini_frequency_penalty: 0.8
+  # gemini_presence_penalty: 0.2
+  # 語音轉文字專用：預設安全策略常誤擋財經/時事內容導致「空回應」
+  # 可選 BLOCK_ONLY_HIGH（建議）或 BLOCK_NONE（最寬鬆，慎用在公開產品）
+  gemini_transcription_safety_threshold: "BLOCK_ONLY_HIGH"
+  # Gemini 2.5 Flash 內建「思考」會吃掉大量 tokens，逐字稿可能變空白；轉稿建議 0（關閉）
+  # -1 = 動態思考（預設行為，不建議用於長音檔轉稿）
+  gemini_thinking_budget: 0
+  # 單次 API 內同一段「節目開場」被模型重貼 N 次（非多次 transcribe）時，在存檔前折疊
+  gemini_dedupe_far_repeats: true
+  gemini_far_repeat_anchor: "我是主持人"
+  gemini_far_repeat_min_significant_chars: 2500
 
   # Model size: tiny, base, small, medium, large-v3-turbo, large-v3
   model: "large-v3-turbo"
@@ -98,11 +117,11 @@ transcription:
 extraction:
   # Provider: openai, anthropic, gemini
   # Set to "local_hf" to use the local open-source Qwen model via transformers
-  provider: "local_hf"
+  provider: "gemini"
   
   # Model selection per provider
   models:
-    gemini: "gemini-2.5-pro"
+    gemini: "gemini-2.5-flash"
     local_hf: "Qwen/Qwen2.5-14B-Instruct-AWQ"
 
   # Chunking only for smaller text models
@@ -114,6 +133,12 @@ extraction:
       - "flash"
     chunk_size_chars: 2500
     overlap_chars: 200
+
+  # 送進 LLM 前合併「連續重複」行/句（減輕轉稿模型反覆貼上同段落的垃圾字）
+  dedupe_consecutive_transcript: true
+  # 與 transcription.gemini_far_repeat_anchor 同步：以錨點比對、移除相隔很遠的重複大段（訪談節目開場）
+  far_repeat_anchor: "我是主持人"
+  far_repeat_min_significant_chars: 2500
 
   # Local Hugging Face extraction settings
   local_hf:

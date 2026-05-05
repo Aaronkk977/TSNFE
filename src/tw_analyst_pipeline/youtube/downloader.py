@@ -233,8 +233,6 @@ class AudioDownloader(LoggerMixin):
             audio_file = self._find_audio_file(video_id)
             if audio_file and audio_file.exists():
                 self.logger.info(f"Successfully downloaded: {audio_file}")
-                max_keep = int(os.environ.get("AUDIO_CACHE_MAX_KEEP", "20") or "20")
-                self.maintain_audio_cache(max_keep=max_keep)
                 return audio_file
             else:
                 raise FileNotFoundError(f"Audio file not found for video {video_id}")
@@ -321,39 +319,8 @@ class AudioDownloader(LoggerMixin):
         return removed
 
     def maintain_audio_cache(self, max_keep: int = 20):
-        """Keep at most N audio files, deleting oldest untranscribed first."""
-        if max_keep <= 0:
-            return
-
-        subfolder = os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily")
-        audio_files = self._list_audio_files_sorted(subfolder)
-        if len(audio_files) <= max_keep:
-            return
-
-        transcribed_ids = self._get_transcribed_video_ids(subfolder)
-        deleted = 0
-
-        for audio_file in audio_files:
-            if len(audio_files) - deleted <= max_keep:
-                break
-
-            video_id = self._extract_video_id_from_audio_file(audio_file)
-            if video_id in transcribed_ids:
-                continue
-
-            try:
-                audio_file.unlink()
-                deleted += 1
-                self.logger.info(f"Deleted old untranscribed audio cache: {audio_file}")
-            except Exception as e:
-                self.logger.warning(f"Failed to delete audio cache {audio_file}: {e}")
-
-        removed_dirs = self.cleanup_empty_audio_dirs(subfolder=subfolder)
-        if deleted > 0 or removed_dirs > 0:
-            self.logger.info(
-                f"Audio cache maintenance complete: deleted_files={deleted}, "
-                f"removed_empty_dirs={removed_dirs}"
-            )
+        """Audio cache cleanup is intentionally disabled."""
+        return
 
     def _log_failed_download(self, video_url: str, error: str):
         """Log failed download to file."""
@@ -375,27 +342,5 @@ class AudioDownloader(LoggerMixin):
             self.logger.warning(f"Failed to log download error: {log_error}")
 
     def cleanup_old_files(self, max_age_days: int = 7):
-        """
-        Clean up old downloaded files.
-
-        Args:
-            max_age_days: Maximum age of files to keep
-        """
-        import time
-
-        current_time = time.time()
-        max_age_seconds = max_age_days * 24 * 3600
-
-        for file_path in self.output_dir.glob(f"{os.environ.get('PIPELINE_OUTPUT_SUBFOLDER', 'daily')}/**/*.wav"):
-            if file_path.is_file():
-                file_age = current_time - file_path.stat().st_mtime
-                if file_age > max_age_seconds:
-                    try:
-                        file_path.unlink()
-                        self.logger.info(f"Deleted old file: {file_path}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to delete {file_path}: {e}")
-
-        removed_dirs = self.cleanup_empty_audio_dirs()
-        if removed_dirs > 0:
-            self.logger.info(f"Removed {removed_dirs} empty audio directories")
+        """Old audio file cleanup is intentionally disabled."""
+        return

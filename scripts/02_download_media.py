@@ -284,12 +284,9 @@ def main() -> int:
     write_json(out_file, output_payload)
     write_json(settings.data_metadata_dir / "download_status_latest.json", output_payload)
 
-    removed_dirs = downloader.cleanup_empty_audio_dirs()
-
     print(f"[INFO] Download status saved: {out_file}")
     print(f"[INFO] Downloaded files: {downloaded_count}")
-    if removed_dirs > 0:
-        print(f"[INFO] Removed empty audio directories: {removed_dirs}")
+    print("[INFO] Audio cleanup is disabled; no local files/directories were removed.")
     return 0
 
 

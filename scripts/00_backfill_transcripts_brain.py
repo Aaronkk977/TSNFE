@@ -48,7 +48,12 @@ def main() -> int:
     parser.add_argument("--transcribe-limit", type=int, default=20)
     parser.add_argument("--max-rounds", type=int, default=120)
     parser.add_argument("--sleep-seconds", type=int, default=20)
-    parser.add_argument("--transcription-provider", choices=["gemini", "whisper"], default="whisper")
+    parser.add_argument(
+        "--transcription-provider",
+        choices=["gemini", "whisper"],
+        default=None,
+        help="Override config/config.yaml transcription.provider; omit to use YAML",
+    )
     parser.add_argument("--text-source", choices=["auto", "cc", "gemini"], default="auto")
     parser.add_argument("--output-subfolder", default="history")
     args = parser.parse_args()
@@ -126,13 +131,13 @@ def main() -> int:
             str(pending_latest),
             "--text-source",
             args.text_source,
-            "--transcription-provider",
-            args.transcription_provider,
             "--limit",
             str(args.transcribe_limit),
             "--run-tag",
             run_tag,
         ]
+        if args.transcription_provider:
+            step3.extend(["--transcription-provider", args.transcription_provider])
         if _run_command(step3, env) != 0:
             print("[Brain] ETL-03 failed in this round; continue next round.")
 

@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
+import re
+import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
@@ -20,6 +24,8 @@ from tw_analyst_pipeline.youtube.downloader import AudioDownloader
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from etl_common import TZ_TAIPEI, read_json, write_json
+
+_LAST_CC_REQUEST_AT = 0.0
 
 
 def _resolve_youtube_cookie_path(settings) -> Optional[Path]:
@@ -89,37 +95,240 @@ def _save_transcript_result(settings, transcript_result: TranscriptResult, item:
     return output_file
 
 
-def _try_youtube_cc(video_id: str, item: dict, settings) -> Optional[tuple[TranscriptResult, Path]]:
-    try:
-        languages = ["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"]
-        transcript_items = None
-        cookie_path = _resolve_youtube_cookie_path(settings)
-        print(f"[INFO] Trying YouTube CC for {video_id} (languages={languages})")
+def _fetch_youtube_transcript_items(
+    video_id: str, languages: list[str], cookie_path: Optional[Path]
+) -> list:
+    """
+    youtube-transcript-api has breaking changes between 0.6.x and 1.x:
+    - 0.6: YouTubeTranscriptApi.get_transcript(video_id, languages=...)
+    - 1.x: list_transcripts -> find_transcript -> fetch() (returns FetchedTranscript / snippets)
+    There is no stable instance method api.fetch(video_id) across versions.
+    """
+    last_err: Exception | None = None
 
+    if hasattr(YouTubeTranscriptApi, "get_transcript"):
         if cookie_path:
             try:
-                if hasattr(YouTubeTranscriptApi, "get_transcript"):
-                    transcript_items = YouTubeTranscriptApi.get_transcript(
-                        video_id,
-                        languages=languages,
-                        cookies=str(cookie_path),
-                    )
-                    print(f"[INFO] YouTube CC request using cookies: {cookie_path}")
-                else:
-                    print(
-                        "[WARN] youtube-transcript-api has no get_transcript(); "
-                        "fallback to fetch() without explicit cookies"
-                    )
-            except (TypeError, AttributeError):
-                print(
-                    "[WARN] youtube-transcript-api cannot use cookies in get_transcript; "
-                    "fallback to fetch() without explicit cookies"
+                items = YouTubeTranscriptApi.get_transcript(
+                    video_id,
+                    languages=languages,
+                    cookies=str(cookie_path),
                 )
+                print(f"[INFO] YouTube CC request using cookies: {cookie_path}")
+                return list(items) if items is not None else []
+            except TypeError:
+                pass
+            except Exception as e:
+                last_err = e
+        try:
+            items = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
+            return list(items) if items is not None else []
+        except Exception as e:
+            last_err = e
 
-        if transcript_items is None:
-            api = YouTubeTranscriptApi()
-            transcript_items = api.fetch(video_id, languages=languages)
+    if hasattr(YouTubeTranscriptApi, "list_transcripts"):
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            transcript = transcript_list.find_transcript(languages)
+            fetched = transcript.fetch()
+            if hasattr(fetched, "to_raw_data"):
+                return list(fetched.to_raw_data())
+            return list(fetched)
+        except Exception as e:
+            last_err = e
 
+    api = YouTubeTranscriptApi()
+    if hasattr(api, "list"):
+        try:
+            transcript_list = api.list(video_id)
+            transcript = transcript_list.find_transcript(languages)
+            if hasattr(transcript, "fetch"):
+                fetched = transcript.fetch()
+                if hasattr(fetched, "to_raw_data"):
+                    return list(fetched.to_raw_data())
+                return list(fetched)
+        except Exception as e:
+            last_err = e
+
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("youtube_transcript_api: no compatible transcript fetch API found")
+
+
+def _is_rate_limit_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    return "429" in msg or "too many requests" in msg
+
+
+def _throttle_youtube_cc_requests(min_interval_seconds: float = 3.0) -> None:
+    global _LAST_CC_REQUEST_AT
+    now = time.time()
+    wait_seconds = min_interval_seconds - (now - _LAST_CC_REQUEST_AT)
+    if wait_seconds > 0:
+        # Add a small jitter to avoid lockstep API patterns.
+        time.sleep(wait_seconds + random.uniform(0.2, 0.8))
+    _LAST_CC_REQUEST_AT = time.time()
+
+
+def _vtt_to_segments(vtt_text: str) -> list[dict]:
+    def _to_seconds(ts: str) -> float:
+        t = ts.replace(",", ".").strip()
+        parts = t.split(":")
+        if len(parts) == 3:
+            h, m, s = parts
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        if len(parts) == 2:
+            m, s = parts
+            return int(m) * 60 + float(s)
+        return float(parts[0])
+
+    lines = [line.rstrip("\n") for line in vtt_text.splitlines()]
+    segments: list[dict] = []
+    cue_lines: list[str] = []
+    start_sec = 0.0
+    end_sec = None
+    in_cue = False
+    cue_id = 0
+    timestamp_re = re.compile(r"^\s*([\d:\.,]+)\s*-->\s*([\d:\.,]+)")
+
+    def _flush_cue() -> None:
+        nonlocal cue_id, cue_lines, in_cue
+        text = " ".join(x.strip() for x in cue_lines if x.strip())
+        if text:
+            segments.append(
+                {
+                    "id": cue_id,
+                    "start": start_sec,
+                    "end": end_sec,
+                    "text": re.sub(r"<[^>]+>", "", text).strip(),
+                    "confidence": None,
+                }
+            )
+            cue_id += 1
+        cue_lines = []
+        in_cue = False
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if in_cue:
+                _flush_cue()
+            continue
+
+        if line.upper() == "WEBVTT":
+            continue
+
+        match = timestamp_re.match(line)
+        if match:
+            if in_cue:
+                _flush_cue()
+            start_sec = _to_seconds(match.group(1))
+            end_sec = _to_seconds(match.group(2))
+            in_cue = True
+            continue
+
+        if in_cue:
+            cue_lines.append(line)
+
+    if in_cue:
+        _flush_cue()
+
+    return segments
+
+
+def _try_ytdlp_subtitle_fallback(video_id: str, item: dict) -> Optional[TranscriptResult]:
+    output_dir = Path("data/processing/debug/yt_dlp_subtitles")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_tpl = str(output_dir / f"{video_id}.%(ext)s")
+    video_url = (item.get("video_url") or "").strip() or f"https://www.youtube.com/watch?v={video_id}"
+    cmd = [
+        "yt-dlp",
+        "--skip-download",
+        "--write-subs",
+        "--write-auto-subs",
+        "--sub-langs",
+        "zh-TW,zh-Hant,zh-Hans,zh,en.*",
+        "--sub-format",
+        "vtt",
+        "--output",
+        output_tpl,
+        video_url,
+    ]
+    try:
+        completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if completed.stdout.strip():
+            print(f"[INFO] yt-dlp subtitle stdout for {video_id}: {completed.stdout.strip()}")
+        if completed.stderr.strip():
+            print(f"[INFO] yt-dlp subtitle stderr for {video_id}: {completed.stderr.strip()}")
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        stdout = (e.stdout or "").strip()
+        if stdout:
+            print(f"[WARN] yt-dlp subtitle stdout for {video_id}: {stdout}")
+        if stderr:
+            print(f"[WARN] yt-dlp subtitle stderr for {video_id}: {stderr}")
+        print(f"[WARN] yt-dlp subtitle fallback failed for {video_id}: exit_code={e.returncode}")
+        return None
+    except Exception as e:
+        print(f"[WARN] yt-dlp subtitle fallback failed for {video_id}: {e}")
+        return None
+
+    candidates = sorted(output_dir.glob(f"{video_id}*.vtt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not candidates:
+        return None
+
+    vtt_path = candidates[0]
+    try:
+        vtt_text = vtt_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        print(f"[WARN] Failed to read yt-dlp subtitle file for {video_id}: {e}")
+        return None
+
+    segments = _vtt_to_segments(vtt_text)
+    text = "\n".join(seg.get("text", "").strip() for seg in segments if seg.get("text")).strip()
+    if not text:
+        return None
+
+    print(f"[INFO] yt-dlp subtitle fallback extracted for {video_id}: chars={len(text)}")
+    return TranscriptResult(
+        video_id=video_id,
+        text=text,
+        segments=segments,
+        language="zh",
+        duration_seconds=(segments[-1]["end"] if segments and segments[-1]["end"] else None),
+        processing_time_seconds=None,
+    )
+
+
+def _try_youtube_cc(video_id: str, item: dict, settings) -> Optional[tuple[TranscriptResult, Path]]:
+    languages = ["zh-Hant", "zh-TW", "zh-Hans", "zh", "en"]
+    cookie_path = _resolve_youtube_cookie_path(settings)
+    print(f"[INFO] Trying YouTube CC for {video_id} (languages={languages})")
+    if cookie_path is None:
+        print("[WARN] No YouTube cookies detected; CC requests are more likely to hit rate limit.")
+
+    max_attempts = 3
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _throttle_youtube_cc_requests()
+            transcript_items = _fetch_youtube_transcript_items(video_id, languages, cookie_path)
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            if _is_rate_limit_error(e) and attempt < max_attempts:
+                backoff = 5 * (2 ** (attempt - 1)) + random.uniform(0.5, 1.5)
+                print(f"[WARN] YouTube CC rate limited for {video_id}; retrying in {backoff:.1f}s")
+                time.sleep(backoff)
+                continue
+            break
+
+    if last_err is not None:
+        print(f"[WARN] YouTube CC unavailable for {video_id}: {last_err}")
+        return None
+
+    try:
         segments = []
         text_chunks = []
 
@@ -205,7 +414,12 @@ def main() -> int:
     parser.add_argument("--input", type=str, default=None, help="download_status or pending_videos JSON path")
     parser.add_argument("--text-source", choices=["auto", "cc", "gemini"], default="auto")
     parser.add_argument("--limit", type=int, default=0, help="Optional cap for processed items")
-    parser.add_argument("--transcription-provider", choices=["gemini", "whisper"], default=None)
+    parser.add_argument(
+        "--transcription-provider",
+        choices=["gemini", "whisper"],
+        default=None,
+        help="Override transcription.provider in config/config.yaml; omit to use YAML",
+    )
     parser.add_argument("--whisper-model", type=str, default=None)
     parser.add_argument("--whisper-device", choices=["cuda", "cpu"], default=None)
     parser.add_argument("--whisper-compute-type", choices=["float16", "float32", "int8"], default=None)
@@ -291,17 +505,39 @@ def main() -> int:
                 if cc_result is not None:
                     transcript_result, transcript_file = cc_result
                     transcript_source = "youtube_cc"
+                elif args.text_source == "auto":
+                    ytdlp_cc_result = _try_ytdlp_subtitle_fallback(video_id, item)
+                    if ytdlp_cc_result is not None:
+                        transcript_result = ytdlp_cc_result
+                        transcript_source = "ytdlp_subtitle"
+                        transcript_file = _save_transcript_result(settings, transcript_result, item)
 
             if transcript_result is None and args.text_source in {"auto", "gemini", "whisper"}:
                 audio_path = downloader._find_latest_audio_file(video_id)
                 if audio_path is None:
-                    raise FileNotFoundError(f"No local audio found for video_id={video_id}")
+                    video_url = (item.get("video_url") or "").strip()
+                    if not video_url:
+                        video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    print(
+                        f"[INFO] No local audio for {video_id}; downloading before transcription..."
+                    )
+                    audio_path = downloader.download(video_url, published_at=published_at)
+                    _update_registry(
+                        settings,
+                        video_id,
+                        {
+                            "audio_path": str(audio_path).replace("\\", "/"),
+                            "status": "audio_ready",
+                        },
+                    )
                 print(f"[INFO] Fallback to audio transcription for {video_id}: {audio_path.name}")
                 active_transcriber = _get_transcriber()
-                transcript_result = active_transcriber.transcribe(audio_path, video_id, published_at=published_at)
+                # Transcribers also call _save_transcript internally; avoid double files by
+                # persisting only the ETL copy (channel/title metadata).
+                transcript_result = active_transcriber.transcribe(
+                    audio_path, video_id, published_at=published_at, persist_to_disk=False
+                )
                 transcript_source = "audio_transcribe"
-                
-                # Overwrite/save with extra metadata
                 transcript_file = _save_transcript_result(settings, transcript_result, item)
 
             if not transcript_result or not transcript_result.text:

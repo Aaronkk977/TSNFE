@@ -642,9 +642,7 @@ def main() -> int:
         pass
 
     if getattr(args, "cleanup_audio", False):
-        print(f"[INFO] Cleaning up audio files older than 0 days...")
-        pipeline.downloader.cleanup_old_files(max_age_days=0)
-        print(f"[INFO] Audio cleanup completed.")
+        print("[INFO] --cleanup-audio was requested, but cleanup is disabled.")
 
     return 0
 

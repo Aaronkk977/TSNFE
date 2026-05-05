@@ -17,6 +17,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from ..extraction.schemas import TranscriptResult
 from ..utils.config import PipelineConfig, Settings
 from ..utils.logging import LoggerMixin
+from ..utils.transcript_repetition import dedupe_transcript_text
 
 
 class GeminiTranscriber(LoggerMixin):
@@ -41,6 +42,238 @@ class GeminiTranscriber(LoggerMixin):
                 return model_name
 
         return (self.settings.gemini_transcription_model or "gemini-2.5-flash").strip()
+
+    def _resolve_max_output_tokens(self) -> int:
+        """Gemini 2.5 Flash allows up to ~64k output tokens; 8192 was truncating long transcripts."""
+        cap = 65536
+        if self.config is None:
+            return cap
+        raw = self.config.get("transcription.gemini_max_output_tokens")
+        if raw is None:
+            return cap
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return cap
+        return max(1024, min(n, cap))
+
+    def _model_supports_logit_penalties(self) -> bool:
+        """Gemini API returns 400 'Penalty is not enabled' for e.g. gemini-2.5-flash."""
+        m = (self.model_name or "").lower()
+        if "flash" in m:
+            return False
+        return True
+
+    def _cfg_float(self, key: str, default: float) -> float:
+        if self.config is None:
+            return default
+        raw = self.config.get(key)
+        if raw is None:
+            return default
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def _cfg_int(self, key: str, default: int) -> int:
+        if self.config is None:
+            return default
+        raw = self.config.get(key)
+        if raw is None:
+            return default
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def _build_transcription_generation_kwargs(self, max_out: int) -> dict:
+        """Sampling params for transcribe; omits frequency/presence penalty on Flash."""
+        gen_kw: dict = {
+            "temperature": self._cfg_float("transcription.gemini_temperature", 0.0),
+            "max_output_tokens": max_out,
+            "top_p": self._cfg_float("transcription.gemini_top_p", 0.95),
+            "top_k": self._cfg_int("transcription.gemini_top_k", 64),
+        }
+        if self._model_supports_logit_penalties():
+            fp = self.config.get("transcription.gemini_frequency_penalty") if self.config else None
+            pp = self.config.get("transcription.gemini_presence_penalty") if self.config else None
+            if fp is not None:
+                try:
+                    gen_kw["frequency_penalty"] = float(fp)
+                except (TypeError, ValueError):
+                    pass
+            if pp is not None:
+                try:
+                    gen_kw["presence_penalty"] = float(pp)
+                except (TypeError, ValueError):
+                    pass
+        else:
+            if self.config and (
+                self.config.get("transcription.gemini_frequency_penalty") is not None
+                or self.config.get("transcription.gemini_presence_penalty") is not None
+            ):
+                self.logger.info(
+                    "Omitting frequency/presence penalty for {} (not supported on this model)",
+                    self.model_name,
+                )
+        return gen_kw
+
+    def _generate_content_transcription(self, prompt: str, uploaded_file, gen_kw: dict):
+        """Call Gemini; retry once without penalties if API rejects Penalty on this model."""
+        try:
+            return self.client.models.generate_content(
+                model=self.model_name,
+                contents=[prompt, uploaded_file],
+                config=types.GenerateContentConfig(**gen_kw),
+            )
+        except Exception as exc:
+            err_s = str(exc).lower()
+            if (
+                "penalty" in err_s
+                and ("invalid" in err_s or "400" in err_s or "not enabled" in err_s)
+                and ("frequency_penalty" in gen_kw or "presence_penalty" in gen_kw)
+            ):
+                self.logger.warning(
+                    "Gemini rejected penalty params ({}); retrying without frequency/presence penalty",
+                    exc,
+                )
+                stripped = {
+                    k: v
+                    for k, v in gen_kw.items()
+                    if k not in ("frequency_penalty", "presence_penalty")
+                }
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=[prompt, uploaded_file],
+                    config=types.GenerateContentConfig(**stripped),
+                )
+            raise
+
+    @staticmethod
+    def _primary_finish_reason(response) -> str:
+        try:
+            cands = getattr(response, "candidates", None) or []
+            if not cands:
+                return ""
+            return str(getattr(cands[0], "finish_reason", "") or "")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _gemini_response_text_safe(response) -> str:
+        """Prefer aggregate .text; fallback to candidates[].content.parts (SDK varies)."""
+        try:
+            text = getattr(response, "text", None)
+            if text:
+                return str(text).strip()
+        except Exception:
+            pass
+        chunks: list[str] = []
+        for cand in getattr(response, "candidates", []) or []:
+            content = getattr(cand, "content", None)
+            # content.parts may exist but be None on some SDK responses → not iterable
+            raw_parts = getattr(content, "parts", None) if content else None
+            parts = raw_parts if raw_parts is not None else []
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if not part_text:
+                    part_text = getattr(part, "thought", None)
+                if part_text:
+                    chunks.append(str(part_text))
+        return "\n".join(chunks).strip()
+
+    def _resolve_transcription_safety_settings(self) -> list:
+        """Default Gemini filters often block finance/news speech (empty candidates). Loguru: use f-strings, not printf."""
+        allowed = {"BLOCK_ONLY_HIGH", "BLOCK_NONE", "OFF", "BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE"}
+        threshold = "BLOCK_ONLY_HIGH"
+        if self.config is not None:
+            raw = (self.config.get("transcription.gemini_transcription_safety_threshold") or "").strip().upper()
+            if raw in {"BLOCK_NONE", "NONE"}:
+                threshold = "BLOCK_NONE"
+            elif raw in allowed:
+                threshold = raw
+        categories = [
+            "HARM_CATEGORY_HARASSMENT",
+            "HARM_CATEGORY_HATE_SPEECH",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "HARM_CATEGORY_DANGEROUS_CONTENT",
+        ]
+        try:
+            return [
+                types.SafetySetting(category=c, threshold=threshold)
+                for c in categories
+            ]
+        except Exception as exc:
+            self.logger.warning(f"Could not build Gemini safety_settings ({exc}); using API defaults")
+            return []
+
+    def _resolve_thinking_config_for_transcription(self):
+        """Gemini 2.5 defaults to dynamic thinking; long audio can spend 30k+ thought tokens and return empty text."""
+        if not hasattr(types, "ThinkingConfig"):
+            return None
+        budget = 0
+        if self.config is not None:
+            raw = self.config.get("transcription.gemini_thinking_budget")
+            if raw is not None:
+                try:
+                    budget = int(raw)
+                except (TypeError, ValueError):
+                    budget = 0
+        try:
+            return types.ThinkingConfig(thinking_budget=budget)
+        except Exception as exc:
+            self.logger.warning(f"Could not build ThinkingConfig ({exc}); omitting")
+            return None
+
+    def _log_gemini_empty_response(self, response) -> None:
+        try:
+            pf = getattr(response, "prompt_feedback", None)
+            block_reason = getattr(pf, "block_reason", None) if pf is not None else None
+            self.logger.error(f"Gemini returned empty text; prompt_feedback={pf!r} block_reason={block_reason!r}")
+            usage = getattr(response, "usage_metadata", None)
+            self.logger.error(f"Gemini usage_metadata={usage!r}")
+            if usage is not None:
+                ttc = getattr(usage, "thoughts_token_count", None)
+                if ttc:
+                    self.logger.error(
+                        f"Gemini thoughts_token_count={ttc}: 2.5 Flash often uses this for internal reasoning; "
+                        f"set transcription.gemini_thinking_budget: 0 in config.yaml for ASR."
+                    )
+            cands = getattr(response, "candidates", None) or []
+            self.logger.error(f"Gemini candidates count={len(cands)}")
+            for i, cand in enumerate(cands):
+                fr = getattr(cand, "finish_reason", None)
+                fr_s = str(fr) if fr is not None else ""
+                if "RECITATION" in fr_s.upper():
+                    self.logger.error(
+                        "Gemini finish_reason=RECITATION: output withheld (recitation / overlap with "
+                        "policy training-data matching). Not fixed by thinking_budget. "
+                        "Use YouTube captions, whisper provider, or pipeline auto→Whisper fallback."
+                    )
+                self.logger.error(
+                    f"Gemini candidate[{i}]: finish_reason={fr!r} "
+                    f"safety_ratings={getattr(cand, 'safety_ratings', None)!r} "
+                    f"content={getattr(cand, 'content', None)!r}"
+                )
+
+            debug_dir = Path(self.settings.data_debug_dir)
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = debug_dir / "last_gemini_transcribe_empty.json"
+            payload = {}
+            try:
+                if hasattr(response, "model_dump"):
+                    payload = response.model_dump(mode="json")
+                elif hasattr(response, "to_dict"):
+                    payload = response.to_dict()  # type: ignore[assignment]
+                else:
+                    payload = {"repr": repr(response)}
+            except Exception as dump_err:
+                payload = {"dump_error": str(dump_err), "repr": repr(response)}
+            with open(debug_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+            self.logger.error(f"Wrote raw Gemini response dump to {debug_path}")
+        except Exception as exc:
+            self.logger.warning(f"Could not log Gemini empty-response diagnostics: {exc}")
 
     @staticmethod
     def _current_date_folder(published_at: str = None) -> str:
@@ -73,7 +306,14 @@ class GeminiTranscriber(LoggerMixin):
         )
         return candidates[0] if candidates else None
 
-    def transcribe(self, audio_path: Path, video_id: Optional[str] = None, published_at: Optional[str] = None) -> TranscriptResult:
+    def transcribe(
+        self,
+        audio_path: Path,
+        video_id: Optional[str] = None,
+        published_at: Optional[str] = None,
+        *,
+        persist_to_disk: bool = True,
+    ) -> TranscriptResult:
         audio_path = Path(audio_path)
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
@@ -105,15 +345,82 @@ class GeminiTranscriber(LoggerMixin):
                 "保留金融術語、股票代碼與數字。"
                 "只輸出逐字稿文字，不要輸出額外說明。"
             )
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=[prompt, uploaded_file],
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=8192,
-                ),
-            )
-            transcript_text = (response.text or "").strip()
+            max_out = self._resolve_max_output_tokens()
+            gen_kw = self._build_transcription_generation_kwargs(max_out)
+            safety = self._resolve_transcription_safety_settings()
+            if safety:
+                gen_kw["safety_settings"] = safety
+            think_cfg = self._resolve_thinking_config_for_transcription()
+            if think_cfg is not None:
+                gen_kw["thinking_config"] = think_cfg
+            response = self._generate_content_transcription(prompt, uploaded_file, gen_kw)
+            transcript_text = self._gemini_response_text_safe(response)
+            try:
+                cand0 = response.candidates[0] if getattr(response, "candidates", None) else None
+                fr = getattr(cand0, "finish_reason", None) if cand0 is not None else None
+                fr_s = str(fr) if fr is not None else ""
+                if "MAX" in fr_s.upper() and "TOKEN" in fr_s.upper():
+                    self.logger.error(
+                        f"Gemini transcript hit output token limit (finish_reason={fr_s!r}, "
+                        f"max_output_tokens={max_out}). If already 65536, split long audio or use Whisper."
+                    )
+            except Exception:
+                pass
+
+            if not transcript_text:
+                self._log_gemini_empty_response(response)
+                fr_empty = self._primary_finish_reason(response)
+                if "RECITATION" in fr_empty.upper():
+                    raise ValueError(
+                        "Gemini withheld the transcript (finish_reason=RECITATION): output blocked by "
+                        "recitation policy (common for broadcast/finance audio matching policy triggers). "
+                        "This is not fixed by gemini_thinking_budget. Use YouTube CC (e.g. ETL cc path), "
+                        "set transcription.provider to whisper, or execution.text_transcript_source: auto "
+                        "for Whisper fallback in SignalPipeline. "
+                        "See data/processing/debug/last_gemini_transcribe_empty.json."
+                    )
+                raise ValueError(
+                    "Gemini returned an empty transcript. For 2.5 Flash, high thoughts_token_count with "
+                    "empty parts often means internal 'thinking' used the budget — set "
+                    "transcription.gemini_thinking_budget: 0. If finish_reason is RECITATION, use CC/Whisper. "
+                    "See logs and data/processing/debug/last_gemini_transcribe_empty.json."
+                )
+
+            before_dedupe_len = len(transcript_text)
+            cfg = self.config
+            do_far = True
+            if cfg is not None and cfg.get("transcription.gemini_dedupe_far_repeats", True) is False:
+                do_far = False
+            if do_far:
+                if cfg is not None:
+                    raw_a = cfg.get("transcription.gemini_far_repeat_anchor", "我是主持人")
+                    try:
+                        min_sig = int(
+                            cfg.get("transcription.gemini_far_repeat_min_significant_chars", 2500) or 2500
+                        )
+                    except (TypeError, ValueError):
+                        min_sig = 2500
+                else:
+                    raw_a, min_sig = "我是主持人", 2500
+                if raw_a is False:
+                    anchor = None
+                else:
+                    anchor = (str(raw_a).strip() or None) if raw_a is not None else "我是主持人"
+                min_sig = max(400, min_sig)
+                transcript_text = dedupe_transcript_text(
+                    transcript_text,
+                    far_repeat_anchor=anchor,
+                    min_far_repeat_sig_chars=min_sig,
+                    do_far_repeat=anchor is not None,
+                )
+                if len(transcript_text) < before_dedupe_len - 200:
+                    self.logger.info(
+                        "Gemini transcript de-junk: removed {} chars ({} -> {}); far-repeat anchor={!r}",
+                        before_dedupe_len - len(transcript_text),
+                        before_dedupe_len,
+                        len(transcript_text),
+                        anchor,
+                    )
 
             processing_time = time.time() - start_time
             result = TranscriptResult(
@@ -133,7 +440,8 @@ class GeminiTranscriber(LoggerMixin):
                 processing_time_seconds=processing_time,
             )
 
-            self._save_transcript(result, published_at=published_at)
+            if persist_to_disk:
+                self._save_transcript(result, published_at=published_at)
             self.logger.info(
                 f"Gemini transcription completed in {processing_time:.1f}s "
                 f"({len(transcript_text)} chars)"

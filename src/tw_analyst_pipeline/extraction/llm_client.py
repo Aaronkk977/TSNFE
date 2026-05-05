@@ -22,6 +22,7 @@ from ..extraction.schemas import CostMetrics, StockSignal, VideoAnalysis, normal
 from ..utils.config import PipelineConfig, Settings
 from ..utils.logging import LoggerMixin
 from ..utils.retry import retry_with_backoff
+from ..utils.transcript_repetition import dedupe_transcript_text
 
 
 class BaseLLMExtractor(LoggerMixin):
@@ -86,6 +87,44 @@ class BaseLLMExtractor(LoggerMixin):
                 break
             start += step
         return chunks
+
+    def _prepare_transcript_for_extraction(self, transcript: str) -> str:
+        """
+        Strip meaningless repetition (common with Gemini ASR) before sending text to the LLM.
+        Disable with extraction.dedupe_consecutive_transcript: false in config.
+        """
+        if not (transcript or "").strip():
+            return transcript
+        if self.config.get("extraction.dedupe_consecutive_transcript", True) is False:
+            return transcript
+        cleaned = self._dedupe_transcript_repetition(transcript)
+        removed = len(transcript) - len(cleaned)
+        if removed > 80:
+            self.logger.info(
+                "Transcript repetition collapse: removed {} chars ({} -> {})",
+                removed,
+                len(transcript),
+                len(cleaned),
+            )
+        return cleaned
+
+    def _dedupe_transcript_repetition(self, text: str) -> str:
+        raw_anchor = self.config.get("extraction.far_repeat_anchor", "我是主持人")
+        if raw_anchor is False:
+            anchor = None
+        else:
+            anchor = (str(raw_anchor).strip() or None) if raw_anchor is not None else "我是主持人"
+        try:
+            min_sig = int(self.config.get("extraction.far_repeat_min_significant_chars", 2500) or 2500)
+        except (TypeError, ValueError):
+            min_sig = 2500
+        min_sig = max(400, min_sig)
+        return dedupe_transcript_text(
+            text,
+            far_repeat_anchor=anchor,
+            min_far_repeat_sig_chars=min_sig,
+            do_far_repeat=anchor is not None,
+        )
 
     @staticmethod
     def _is_small_text_model(model_name: str) -> bool:
@@ -202,6 +241,24 @@ class BaseLLMExtractor(LoggerMixin):
         except (TypeError, ValueError):
             timeout = 300
         return max(30, timeout)
+
+    def _generate_content_with_timeout(self, *, model: str, contents, config, timeout_seconds: int):
+        """Support both old/new google-genai timeout parameter names."""
+        try:
+            return self.client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+                request_options={"timeout": timeout_seconds},
+            )
+        except TypeError as e:
+            if "request_options" not in str(e):
+                raise
+            return self.client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
 
     @staticmethod
     def _escape_newlines_in_json_strings(text: str) -> str:
@@ -376,6 +433,7 @@ class OpenAIExtractor(BaseLLMExtractor):
         start_time = time.time()
 
         try:
+            transcript = self._prepare_transcript_for_extraction(transcript)
             # Prepare prompt
             system_prompt = self._get_system_prompt()
             user_prompt = self._get_extraction_prompt(transcript)
@@ -490,6 +548,7 @@ class AnthropicExtractor(BaseLLMExtractor):
         start_time = time.time()
 
         try:
+            transcript = self._prepare_transcript_for_extraction(transcript)
             system_prompt = self._get_system_prompt()
             user_prompt = self._get_extraction_prompt(transcript)
 
@@ -568,6 +627,7 @@ class GoogleExtractor(BaseLLMExtractor):
         start_time = time.time()
 
         try:
+            transcript = self._prepare_transcript_for_extraction(transcript)
             model_name = self._resolve_gemini_model_name()
 
             timeout_seconds = self._get_api_timeout_seconds()
@@ -591,7 +651,7 @@ class GoogleExtractor(BaseLLMExtractor):
                     self.logger.info("Gemini chunk {}/{}", index, len(chunks))
 
                 prompt = self._get_extraction_prompt(chunk_text)
-                response = self.client.models.generate_content(
+                response = self._generate_content_with_timeout(
                     model=model_name,
                     contents=prompt,
                     config=types.GenerateContentConfig(
@@ -600,7 +660,7 @@ class GoogleExtractor(BaseLLMExtractor):
                         max_output_tokens=self.settings.llm_max_tokens,
                         response_mime_type="application/json",
                     ),
-                    request_options={"timeout": timeout_seconds},
+                    timeout_seconds=timeout_seconds,
                 )
 
                 prompt_tokens, output_tokens = self._read_usage_metadata_tokens(response)
@@ -619,7 +679,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 signals_data=signals_data,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                processing_time_seconds=time.time() - start_time,
+                processing_time=time.time() - start_time,
                 transcript_length_chars=len(transcript),
             )
 
@@ -762,7 +822,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 model_name
             )
             
-            response = self.client.models.generate_content(
+            response = self._generate_content_with_timeout(
                 model=model_name,
                 contents=[self._get_multimodal_prompt(), uploaded_file],
                 config=types.GenerateContentConfig(
@@ -771,7 +831,7 @@ class GoogleExtractor(BaseLLMExtractor):
                     max_output_tokens=self.settings.llm_max_tokens,
                     response_mime_type="application/json",
                 ),
-                request_options={"timeout": timeout_seconds},
+                timeout_seconds=timeout_seconds,
             )
 
             # --- Log raw response to a debug file to answer user request ---
@@ -815,7 +875,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 signals_data=signals_data,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                processing_time_seconds=time.time() - start_time,
+                processing_time=time.time() - start_time,
                 transcript_length_chars=None,
             )
 
@@ -839,7 +899,10 @@ class GoogleExtractor(BaseLLMExtractor):
         finally:
             if uploaded_file is not None:
                 try:
-                    self.client.files.delete(name=uploaded_file.name)
+                    self.logger.info(
+                        "Skip remote uploaded-file deletion (disabled): {}",
+                        uploaded_file.name,
+                    )
                 except Exception:
                     pass
 
@@ -863,7 +926,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 "Requesting Gemini URL multimodal extraction (timeout={}s)",
                 timeout_seconds,
             )
-            response = self.client.models.generate_content(
+            response = self._generate_content_with_timeout(
                 model=model_name,
                 contents=self._get_youtube_url_multimodal_prompt(youtube_url=youtube_url),
                 config=types.GenerateContentConfig(
@@ -872,7 +935,7 @@ class GoogleExtractor(BaseLLMExtractor):
                     max_output_tokens=self.settings.llm_max_tokens,
                     response_mime_type="application/json",
                 ),
-                request_options={"timeout": timeout_seconds},
+                timeout_seconds=timeout_seconds,
             )
 
             response_text = self._get_response_text_safe(response)
@@ -888,7 +951,7 @@ class GoogleExtractor(BaseLLMExtractor):
                 signals_data=signals_data,
                 video_id=video_id,
                 analyst_name=analyst_name,
-                processing_time_seconds=time.time() - start_time,
+                processing_time=time.time() - start_time,
                 transcript_length_chars=None,
             )
 
@@ -1355,8 +1418,11 @@ class QwenOpenAIExtractor(OpenAIExtractor):
         analyst_name: Optional[str] = None,
     ) -> VideoAnalysis:
         """Extract signals using sliding window chunking for Qwen to avoid losing focus."""
-        self.logger.info(f"Extracting signals from {video_id} using Qwen with Sliding Window (length: {len(transcript)})")
         start_time = time.time()
+        transcript = self._prepare_transcript_for_extraction(transcript)
+        self.logger.info(
+            f"Extracting signals from {video_id} using Qwen with Sliding Window (length: {len(transcript)})"
+        )
 
         model_name = (
             self.config.get_model_name("qwen")
