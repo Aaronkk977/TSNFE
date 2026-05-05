@@ -196,13 +196,14 @@ def main() -> int:
 
     source_file = Path(args.input) if args.input else settings.data_metadata_dir / "video_registry.json"
     pending_items = _load_items(settings, args.input)
-    # Optional cap
-    items = pending_items[:50]
+    # Batch cap for in-window candidates only. Out-of-window records do not consume slots.
+    batch_limit = 50
+    in_window_count = 0
     
     results = []
     downloaded_count = 0
 
-    for idx, item in enumerate(items):
+    for item in pending_items:
         video_id = str(item.get("video_id", "")).strip()
         video_url = str(item.get("video_url", "")).strip()
         published_at = item.get("published_at")
@@ -230,6 +231,11 @@ def main() -> int:
             _update_registry(settings, video_id, {"status": "skipped_out_of_window"}) # <--- 關鍵：清出佇列
             continue
 
+        # Only in-window videos should consume this run's batch capacity.
+        if in_window_count >= batch_limit:
+            break
+        in_window_count += 1
+
         if args.min_views > 0:
             vc = int(view_count) if view_count else 0
             if vc < args.min_views:
@@ -256,7 +262,7 @@ def main() -> int:
             _update_registry(settings, video_id, {"status": "audio_ready", "audio_path": str(existing_audio)})
             continue
 
-        if idx > 0 and args.max_wait_seconds > 0:
+        if downloaded_count > 0 and args.max_wait_seconds > 0:
             delay = random.uniform(max(0.0, args.min_wait_seconds), max(args.min_wait_seconds, args.max_wait_seconds))
             print(f"[INFO] Sleeping {delay:.1f}s before next download")
             time.sleep(delay)

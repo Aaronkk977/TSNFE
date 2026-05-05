@@ -9,7 +9,7 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from tw_analyst_pipeline.extraction.schemas import VideoAnalysis, normalize_label
 from tw_analyst_pipeline.stock_data.validators import StockValidator
-from tw_analyst_pipeline.utils.config import get_settings
+from tw_analyst_pipeline.utils.config import get_pipeline_config, get_settings
 from tw_analyst_pipeline.utils.logging import setup_logging
 
 from etl_common import TZ_TAIPEI, write_json
@@ -29,6 +29,31 @@ LABEL_PRIORITY = {
     "中立": 1,
     "模糊": 0,
 }
+
+
+def _convert_to_traditional(text: str) -> str:
+    try:
+        import opencc
+
+        converter = opencc.OpenCC("s2twp")
+        return converter.convert(text or "")
+    except Exception:
+        return text or ""
+
+
+def _signal_label(signal) -> str:
+    label = normalize_label(signal.normalized_label or signal.implied_label)
+    if label != "中立":
+        return label
+
+    action_value = str(getattr(getattr(signal, "action", None), "value", getattr(signal, "action", ""))).strip().lower()
+    if action_value == "buy":
+        return "買進"
+    if action_value == "sell":
+        return "賣出"
+    if action_value == "hold":
+        return "中立"
+    return label
 
 
 def _pick_cell_value(current: str, incoming: str) -> str:
@@ -52,7 +77,7 @@ def _collect_matrix(analyses: List[VideoAnalysis]) -> Tuple[List[str], Dict[str,
             stocks.add(code)
             stock_display[code] = f"{code} {name}"
 
-            label = normalize_label(signal.normalized_label or signal.implied_label)
+            label = _signal_label(signal)
             existing = matrix[analyst].get(code, "")
             matrix[analyst][code] = _pick_cell_value(existing, label)
 
@@ -143,7 +168,7 @@ def _build_stock_rankings(analyses: List[VideoAnalysis], limit: int = 10) -> dic
         for signal in analysis.signals:
             code = signal.stock_code
             stock_names[code] = signal.stock_name or code
-            label = normalize_label(signal.normalized_label or signal.implied_label)
+            label = _signal_label(signal)
 
             if label == "買進":
                 analyst_recommended[code].add(analyst)
@@ -208,33 +233,86 @@ def _load_signal_analyses(signal_dir: Path) -> List[VideoAnalysis]:
     return analyses
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="ETL-05 build daily reports")
-    parser.add_argument("--target-date", type=str, required=True, help="YYYY-MM-DD")
-    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
-    args = parser.parse_args()
+def _iter_dates(
+    signal_base_dir: Path,
+    target_date: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    all_dates: bool,
+) -> List[str]:
+    if target_date:
+        return [target_date]
 
-    setup_logging(level=args.log_level)
-    settings = get_settings()
+    if all_dates:
+        return sorted([d.name for d in signal_base_dir.iterdir() if d.is_dir()]) if signal_base_dir.exists() else []
 
+    if start_date and end_date:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        if start > end:
+            raise ValueError("--start-date must be <= --end-date")
+        days = []
+        cur = start
+        while cur <= end:
+            days.append(cur.strftime("%Y-%m-%d"))
+            cur += timedelta(days=1)
+        return days
+
+    raise ValueError("Use one mode: --target-date, --start-date+--end-date, or --all-dates")
+
+
+def _build_one_date(settings, target_date: str) -> tuple[bool, list]:
     subfolder = os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily")
-    signal_dir = settings.data_signals_dir / subfolder / args.target_date
+    signal_dir = settings.data_signals_dir / subfolder / target_date
     analyses = _load_signal_analyses(signal_dir)
     if not analyses:
         print(f"[WARN] No signal json found under {signal_dir}")
-        return 1
+        return False, []
 
-    if settings.validate_stock_codes:
-        validator = StockValidator(settings)
-        for analysis in analyses:
-            analysis.signals = validator.resolve_signals(analysis.signals)
+    # Always apply smart validation for report generation:
+    # alias/name/code resolution + fuzzy matching + optional homophone correction.
+    validator = StockValidator(settings)
+    registry = {}
+    registry_path = settings.data_metadata_dir / "video_registry.json"
+    if registry_path.exists():
+        try:
+            with open(registry_path, "r", encoding="utf-8") as f:
+                registry = json.load(f)
+        except Exception:
+            registry = {}
+
+    dropped_signals = []
+    for analysis in analyses:
+        # Normalize Chinese variant before validation/matching.
+        for sig in analysis.signals:
+            if getattr(sig, "stock_name", None):
+                sig.stock_name = _convert_to_traditional(sig.stock_name)
+            if getattr(sig, "reasoning", None):
+                sig.reasoning = _convert_to_traditional(sig.reasoning)
+            if getattr(sig, "label_reason", None):
+                sig.label_reason = _convert_to_traditional(sig.label_reason)
+
+        validated, dropped = validator.resolve_signals(analysis.signals, include_dropped=True)
+        analysis.signals = validated
+        video_meta = registry.get(analysis.video_id, {}) if isinstance(registry, dict) else {}
+        for row in dropped:
+            dropped_signals.append(
+                {
+                    "report_date": target_date,
+                    "video_id": analysis.video_id,
+                    "analyst_name": analysis.analyst_name,
+                    "video_title": video_meta.get("title"),
+                    "video_published_at": analysis.video_published_at or video_meta.get("published_at"),
+                    **row,
+                }
+            )
 
     ordered_stocks, matrix, stock_display = _collect_matrix(analyses)
     stock_rankings = _build_stock_rankings(analyses)
 
     now = datetime.now(TZ_TAIPEI)
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    out_dir = settings.data_reports_dir / subfolder / args.target_date
+    out_dir = settings.data_reports_dir / subfolder / target_date
     out_dir.mkdir(parents=True, exist_ok=True)
 
     md_file = out_dir / f"analyst_stock_matrix_{timestamp}.md"
@@ -246,9 +324,10 @@ def main() -> int:
 
     summary_payload = {
         "completed_at": now.isoformat(timespec="seconds"),
-        "target_date": args.target_date,
+        "target_date": target_date,
         "signal_file_count": len(analyses),
         "stock_rankings": stock_rankings,
+        "dropped_signal_count": len(dropped_signals),
         "dated_files": {
             "markdown": str(md_file),
             "csv": str(csv_file),
@@ -259,7 +338,7 @@ def main() -> int:
 
     latest_payload = {
         "generated_at": now.isoformat(timespec="seconds"),
-        "target_date": args.target_date,
+        "target_date": target_date,
         "count": len(analyses),
         "items": [{"video_id": a.video_id, "analyst_name": a.analyst_name, "signal_count": len(a.signals)} for a in analyses],
     }
@@ -268,7 +347,63 @@ def main() -> int:
     print(f"[INFO] Markdown report: {md_file}")
     print(f"[INFO] CSV report: {csv_file}")
     print(f"[INFO] Summary report: {summary_file}")
-    return 0
+    return True, dropped_signals
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="ETL-05 build daily reports")
+    parser.add_argument("--target-date", type=str, default=None, help="YYYY-MM-DD")
+    parser.add_argument("--start-date", type=str, default=None, help="YYYY-MM-DD, inclusive")
+    parser.add_argument("--end-date", type=str, default=None, help="YYYY-MM-DD, inclusive")
+    parser.add_argument("--all-dates", action="store_true", help="Build reports for every signal date folder")
+    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
+    args = parser.parse_args()
+
+    setup_logging(level=args.log_level)
+    settings = get_settings()
+    pipeline_config = get_pipeline_config()
+    settings.stock_validation_provider = (
+        pipeline_config.get("stock_data.validation_provider") or settings.stock_validation_provider
+    )
+
+    subfolder = os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily")
+    signal_base_dir = settings.data_signals_dir / subfolder
+    try:
+        dates = _iter_dates(signal_base_dir, args.target_date, args.start_date, args.end_date, args.all_dates)
+    except ValueError as e:
+        print(f"[ERROR] {e}")
+        return 1
+
+    if not dates:
+        print(f"[WARN] No date folders found under {signal_base_dir}")
+        return 1
+
+    ok = 0
+    run_started = datetime.now(TZ_TAIPEI)
+    all_dropped: list = []
+    for day in dates:
+        success, dropped_rows = _build_one_date(settings, day)
+        if success:
+            ok += 1
+        all_dropped.extend(dropped_rows)
+
+    subfolder = os.environ.get("PIPELINE_OUTPUT_SUBFOLDER", "daily")
+    history_reports = settings.data_reports_dir / subfolder
+    dropped_bundle = history_reports / f"dropped_signals_{run_started.strftime('%Y%m%d_%H%M%S')}.json"
+    write_json(
+        dropped_bundle,
+        {
+            "generated_at": datetime.now(TZ_TAIPEI).isoformat(timespec="seconds"),
+            "subfolder": subfolder,
+            "date_range": {"start": dates[0], "end": dates[-1], "count_days": len(dates)},
+            "total_dropped": len(all_dropped),
+            "items": all_dropped,
+        },
+    )
+    print(f"[INFO] Consolidated dropped signals: {dropped_bundle}")
+
+    print(f"[INFO] Report build completed: {ok}/{len(dates)} date folders")
+    return 0 if ok > 0 else 1
 
 
 if __name__ == "__main__":

@@ -149,6 +149,7 @@ data/raw/**/*.m4a
 data/raw/**/*.webm
 data/processing/**/*.json
 data/processed/**/*.json
+data/processed/
 logs/*.log
 logs/*.gz
 logs/*.json
