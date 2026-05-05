@@ -58,6 +58,31 @@ def _write_csv(path, rows):
         for stock in rows:
             writer.writerow([stock['code'], stock['name'], stock.get('english_name', '')])
 
+
+def _is_supported_symbol(code: str) -> bool:
+    """Keep common TW equity/ETF symbols and skip warrant-like products."""
+    code = str(code or "").strip().upper()
+    if not re.match(r"^\d{4,6}[A-Z]?$", code):
+        return False
+
+    # 4-digit common stock code
+    if re.match(r"^\d{4}$", code):
+        return True
+    # 5-digit ETF/fund-like code
+    if re.match(r"^\d{5}$", code):
+        return True
+    # 5-digit code with one suffix letter (e.g. 00981A)
+    if re.match(r"^\d{5}[A-Z]$", code):
+        return True
+    # 6-digit codes are usually ETF/fund families when starting with 00.
+    if re.match(r"^00\d{4}$", code):
+        return True
+    # 6-digit + suffix letter variants, keep only 00-prefix family.
+    if re.match(r"^00\d{4}[A-Z]$", code):
+        return True
+    return False
+
+
 def fetch_json(url):
     try:
         response = requests.get(url, timeout=30)
@@ -70,11 +95,12 @@ def fetch_json(url):
         return []
 
 
-def fetch_twse_etf_etn_list():
-    """Fetch ETF/ETN listings from TWSE ISIN page.
+def fetch_twse_isin_instruments():
+    """Fetch listed instruments from TWSE ISIN page.
 
-    The official stock open APIs mainly cover listed/OTC companies. ETF/ETN symbols
-    are more complete on the ISIN list page, so we merge them into local stock codes.
+    The ISIN page covers common stocks, ETFs/ETNs and some special products
+    (e.g. codes with trailing letters like 00981A). We parse all rows with
+    valid Taiwan-style symbols and merge them into local stock codes.
     """
     try:
         response = requests.get(TWSE_ISIN_URL, timeout=30)
@@ -95,8 +121,7 @@ def fetch_twse_etf_etn_list():
         if not rows:
             return {}
 
-        etf_like = {}
-        current_section = ""
+        instruments = {}
 
         for row_html in rows:
             cells = re.findall(r"<td[^>]*>(.*?)</td>", row_html, flags=re.IGNORECASE | re.DOTALL)
@@ -105,51 +130,43 @@ def fetch_twse_etf_etn_list():
 
             # Section titles are often single-cell rows.
             if len(cells) == 1:
-                value = clean_text(cells[0])
-                if "ETF" in value or "ETN" in value:
-                    current_section = value
-                elif value:
-                    current_section = ""
                 continue
 
-            value = clean_text(cells[0])
-            if not value:
+            # Prefer first cell (often code + name), fallback to second cell when needed.
+            primary = clean_text(cells[0])
+            secondary = clean_text(cells[1]) if len(cells) > 1 else ""
+            candidate = primary if primary else secondary
+            if not candidate:
                 continue
 
-            if "ETF" in value or "ETN" in value:
-                current_section = value
-                continue
-
-            # Skip until ETF/ETN sections begin.
-            if not current_section:
-                continue
-
-            # When section changes to non ETF/ETN groups, stop collecting.
-            if "ETF" not in current_section and "ETN" not in current_section:
-                continue
-
-            # First column stores code+name, e.g. "006208 富邦台50".
-            match = re.match(r"^([0-9]{4,6}[A-Z]?)\s+(.+)$", value)
+            # Typical formats:
+            # - "006208 富邦台50"
+            # - "00981A 主動統一台股增長"
+            # - "2330 台積電"
+            # - sometimes no space between code/name
+            match = re.match(r"^([0-9]{4,6}[A-Z]?)\s*(.+)$", candidate)
             if not match:
                 continue
 
             code = match.group(1).strip().upper()
-            name = match.group(2).strip()
-            if not re.match(r"^\d{4,6}[A-Z]?$", code):
+            name = match.group(2).strip(" -")
+            if not name:
+                name = secondary
+            if not _is_supported_symbol(code):
                 continue
             if not name:
                 continue
 
-            etf_like[code] = {
+            instruments[code] = {
                 "code": code,
                 "name": name,
                 "english_name": "",
             }
 
-        return etf_like
+        return instruments
 
     except Exception as e:
-        logger.warning(f"Failed to fetch ETF/ETN list from TWSE ISIN: {e}")
+        logger.warning(f"Failed to fetch instrument list from TWSE ISIN: {e}")
         return {}
 
 def main():
@@ -175,16 +192,16 @@ def main():
     combined_stocks.update(twse_stocks)
     combined_stocks.update(tpex_stocks)
 
-    logger.info("Fetching ETF/ETN instruments from TWSE ISIN page...")
-    etf_etn_stocks = fetch_twse_etf_etn_list()
-    if etf_etn_stocks:
-        logger.info("Fetched %s ETF/ETN records", len(etf_etn_stocks))
-        for code, record in etf_etn_stocks.items():
-            # TWSE file should contain listed ETFs/ETNs for local validation.
+    logger.info("Fetching listed instruments from TWSE ISIN page...")
+    isin_stocks = fetch_twse_isin_instruments()
+    if isin_stocks:
+        logger.info("Fetched %s ISIN records", len(isin_stocks))
+        for code, record in isin_stocks.items():
+            # TWSE file should contain listed instruments for local validation.
             twse_stocks[code] = record
             combined_stocks[code] = record
     else:
-        logger.warning("No ETF/ETN records fetched from TWSE ISIN page")
+        logger.warning("No ISIN records fetched from TWSE ISIN page")
 
     # Prepare directories
     os.makedirs(OUTPUT_DIR, exist_ok=True)

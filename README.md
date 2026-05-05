@@ -191,3 +191,5 @@ TSNFE/
 3. 名字和代號validation改到report階段再做 是先以名稱和代碼都對 否則先以名稱去找有的話 用對應的代碼把原本錯的代碼改了 否則用拼音之類的方法找同音的名稱有的話 用對應的代碼把原本錯的代碼改了 否則代碼對應的公司名稱和目前的有一個字一樣 用對應的名稱把原本的名稱改了
 4. 現在會出現重複的股票標的 請debug
 5. 現在新興 2605會被改成是00711B debug
+
+PIPELINE_OUTPUT_SUBFOLDER=history python scripts/05_build_daily_reports.py --all-dates

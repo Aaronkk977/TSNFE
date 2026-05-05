@@ -600,7 +600,6 @@ class GoogleExtractor(BaseLLMExtractor):
                         max_output_tokens=self.settings.llm_max_tokens,
                         response_mime_type="application/json",
                     ),
-                    request_options={"timeout": timeout_seconds},
                 )
 
                 prompt_tokens, output_tokens = self._read_usage_metadata_tokens(response)
@@ -771,7 +770,6 @@ class GoogleExtractor(BaseLLMExtractor):
                     max_output_tokens=self.settings.llm_max_tokens,
                     response_mime_type="application/json",
                 ),
-                request_options={"timeout": timeout_seconds},
             )
 
             # --- Log raw response to a debug file to answer user request ---
@@ -872,7 +870,6 @@ class GoogleExtractor(BaseLLMExtractor):
                     max_output_tokens=self.settings.llm_max_tokens,
                     response_mime_type="application/json",
                 ),
-                request_options={"timeout": timeout_seconds},
             )
 
             response_text = self._get_response_text_safe(response)

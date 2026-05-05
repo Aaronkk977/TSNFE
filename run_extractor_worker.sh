@@ -21,5 +21,5 @@ while true; do
         --llm-model Qwen/Qwen2.5-14B-Instruct-AWQ
 
     echo "[Extractor] Batch finished. Waiting..."
-    sleep 30
+    sleep 3
 done
